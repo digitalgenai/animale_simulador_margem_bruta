@@ -1,0 +1,6 @@
+pandas
+numpy
+openpyxl
+dash
+dash-bootstrap-components
+dash-ag-grid
