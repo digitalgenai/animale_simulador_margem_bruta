@@ -1,0 +1,14 @@
+services:
+  simulador-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: simulador-web
+    ports:
+      - "8050:8050"
+    environment:
+      - BASE_SIMULADOR_PATH=/data/base_simulador.xlsx
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./data:/data:ro
+    restart: unless-stopped

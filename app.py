@@ -202,6 +202,23 @@ def _history_component(hist: Dict[str, Any], suffix: str):
         id=f"hist-box-{suffix}",
     )
 
+def _row_from_event(cell_event: dict, rowData: list[dict] | None):
+    if not cell_event or not rowData:
+        return None
+
+    row_id = cell_event.get("rowId")
+    if row_id is not None:
+        # seu getRowId = "params.data.id" -> evento devolve rowId = id
+        for r in rowData:
+            if str(r.get("id")) == str(row_id):
+                return r
+
+    # fallback pelo índice (geralmente funciona também)
+    idx = cell_event.get("rowIndex")
+    if isinstance(idx, int) and 0 <= idx < len(rowData):
+        return rowData[idx]
+
+    return None
 
 # ---------- Dash app ----------
 app = Dash(
@@ -264,30 +281,20 @@ def make_grid(grid_id: str, column_defs: List[Dict[str, Any]]) -> dag.AgGrid:
         id=grid_id,
         columnDefs=column_defs,
         rowData=[],
-
-        # MUITO IMPORTANTE: ajuda o grid a entender que o dataset mudou
         getRowId="params.data.id",
-
         defaultColDef={
             "resizable": True,
             "sortable": True,
             "filter": True,
+            "wrapHeaderText": True,
+            "autoHeaderHeight": True,
         },
-
         dashGridOptions={
-            # use string compatível (evita diferenças entre versões)
             "rowSelection": "single",
             "animateRows": True,
-
-            # mantém suas regras de cor
             **_apply_row_class_rules(),
         },
-
-        # REMOVER responsiveSizeToFit (causa warning/bug em tabs)
-        # columnSize="responsiveSizeToFit",
         className="ag-theme-alpine",
-
-        # garante largura mínima dentro do flex
         style={"height": "520px", "width": "100%", "minWidth": "0"},
     )
 
@@ -699,12 +706,14 @@ def fit_columns_on_visible_tab(active_tab):
     Output("hist-box-t2", "children"),
     Input("grid-t1", "cellClicked"),
     Input("grid-t2", "cellClicked"),
+    State("grid-t1", "rowData"),
+    State("grid-t2", "rowData"),
     Input("forn", "value"),
     Input("fab", "value"),
     Input("cat", "value"),
     Input("tabs", "active_tab"),
 )
-def on_cell_click(cell1, cell2, forn, fab, cat, active_tab):
+def on_cell_click(cell1, cell2, rowData1, rowData2, forn, fab, cat, active_tab):
     hist_default = {"produto": "Selecione...", "hist_6m": "-", "hist_3m": "-", "hist_nov": "-", "hist_pico": "-"}
 
     trig = ctx.triggered_id
@@ -714,16 +723,16 @@ def on_cell_click(cell1, cell2, forn, fab, cat, active_tab):
     if df_base.empty:
         return _history_component(hist_default, "t1").children, _history_component(hist_default, "t2").children
 
-    if trig == "grid-t1" and active_tab == "tab-1" and cell1 and isinstance(cell1, dict):
-        data = cell1.get("data") or {}
-        produto_key = data.get("_produto_key")
+    if trig == "grid-t1" and active_tab == "tab-1" and isinstance(cell1, dict):
+        row_grid = _row_from_event(cell1, rowData1)
+        produto_key = (row_grid or {}).get("_produto_key") or (row_grid or {}).get("id")
         if produto_key and produto_key in df_base.index:
             row = df_base.loc[produto_key]
             return _history_component(build_history_payload(row), "t1").children, no_update
 
-    if trig == "grid-t2" and active_tab == "tab-2" and cell2 and isinstance(cell2, dict):
-        data = cell2.get("data") or {}
-        produto_key = data.get("_produto_key")
+    if trig == "grid-t2" and active_tab == "tab-2" and isinstance(cell2, dict):
+        row_grid = _row_from_event(cell2, rowData2)
+        produto_key = (row_grid or {}).get("_produto_key") or (row_grid or {}).get("id")
         if produto_key and produto_key in df_base.index:
             row = df_base.loc[produto_key]
             return no_update, _history_component(build_history_payload(row), "t2").children
@@ -732,6 +741,16 @@ def on_cell_click(cell1, cell2, forn, fab, cat, active_tab):
 
 
 # ---------- Duplo clique: abrir modais ----------
+# helper local (coloca perto do _safe_float_percent)
+def _parse_float(val, default=0.0) -> float:
+    try:
+        if val is None:
+            return default
+        return float(str(val).replace(",", ".").strip())
+    except Exception:
+        return default
+
+
 @app.callback(
     Output("modal-fin", "is_open"),
     Output("modal-fin-title", "children"),
@@ -746,60 +765,153 @@ def on_cell_click(cell1, cell2, forn, fab, cat, active_tab):
     Output("mkt-delta", "value"),
 
     Output("store-selected", "data"),
+    Output("store-sim", "data"),
 
     Input("grid-t1", "cellDoubleClicked"),
     Input("grid-t2", "cellDoubleClicked"),
     Input("fin-close", "n_clicks"),
     Input("mkt-close", "n_clicks"),
 
+    Input("fin-save", "n_clicks"),
+    Input("fin-reset", "n_clicks"),
+    Input("mkt-save", "n_clicks"),
+    Input("mkt-reset", "n_clicks"),
+
     State("tabs", "active_tab"),
     State("meta_t1", "value"),
     State("meta_t2", "value"),
     State("modal-fin", "is_open"),
     State("modal-mkt", "is_open"),
+
+    State("modal-fin-tabs", "active_tab"),
+    State("fin-p", "value"),
+    State("fin-m", "value"),
+    State("fin-p2", "value"),
+    State("fin-c", "value"),
+    State("mkt-delta", "value"),
+
+    State("store-selected", "data"),
+    State("store-sim", "data"),
+
+    State("grid-t1", "rowData"),
+    State("grid-t2", "rowData"),
+    prevent_initial_call=True,
 )
-def modal_controller(cell1, cell2, fin_close, mkt_close, active_tab, meta_t1, meta_t2, fin_is_open, mkt_is_open):
+def modal_controller(
+    cell1, cell2, fin_close, mkt_close,
+    fin_save, fin_reset, mkt_save, mkt_reset,
+    active_tab, meta_t1, meta_t2, fin_is_open, mkt_is_open,
+    fin_tab, fin_p, fin_m, fin_p2, fin_c, mkt_delta,
+    selected_state, sim_store, rowData1, rowData2
+):
     trig = ctx.triggered_id
 
-    # Defaults: mantém estado atual se não for o trigger certo
     fin_open = bool(fin_is_open)
     mkt_open = bool(mkt_is_open)
 
-    # ---- Fechar modais ----
+    sim = {
+        "manual": dict((sim_store or {}).get("manual", {})),
+        "conc": dict((sim_store or {}).get("conc", {})),
+    }
+
+    produto_key = (selected_state or {}).get("produto_key")
+
+    # ---------- FECHAR ----------
     if trig == "fin-close":
         return (
             False, no_update, no_update, no_update, no_update, no_update,
             mkt_open, no_update, no_update, no_update,
-            no_update
+            no_update, no_update
         )
 
     if trig == "mkt-close":
         return (
             fin_open, no_update, no_update, no_update, no_update, no_update,
             False, no_update, no_update, no_update,
-            no_update
+            no_update, no_update
         )
 
-    meta_t1_atual = _safe_float_percent(meta_t1, 0.30)
-    meta_t2_atual = _safe_float_percent(meta_t2, 0.00)
-
-    # ---- Abrir Financeiro (Tab 1) ----
-    if trig == "grid-t1" and active_tab == "tab-1" and cell1 and isinstance(cell1, dict):
-        data = cell1.get("data") or {}
-        produto_key = data.get("_produto_key")
+    # ---------- SALVAR / RESET FIN ----------
+    if trig in ("fin-save", "fin-reset"):
         if not produto_key:
             return (
                 fin_open, no_update, no_update, no_update, no_update, no_update,
                 mkt_open, no_update, no_update, no_update,
-                {"produto_key": None}
+                no_update, no_update
             )
 
-        menor_conc = float(data.get("_menor_conc", 0.0))
-        p_atual = float(data.get("_p_atual", 0.0))
+        if trig == "fin-reset":
+            sim["manual"].pop(produto_key, None)
+            return (
+                False, no_update, no_update, no_update, no_update, no_update,
+                mkt_open, no_update, no_update, no_update,
+                no_update, sim
+            )
 
-        sim_manual_ativa = bool(data.get("_sim_manual_ativa", False))
-        sim_preco_man = float(data.get("_sim_preco_man", 0.0))
-        sim_marg_man = float(data.get("_sim_marg_man", 0.0))
+        # fin-save
+        if fin_tab == "tab-marg":
+            p = _parse_float(fin_p, 0.0)
+            m_perc = _parse_float(fin_m, 0.0) / 100.0
+            sim["manual"][produto_key] = {"ativa": True, "preco": p, "margem": m_perc}
+        else:
+            p = _parse_float(fin_p2, 0.0)
+            c = _parse_float(fin_c, 0.0)
+            m = 1 - TAXA_DEDUCAO_FATURAMENTO - (c / p) if p > 0 else 0.0
+            sim["manual"][produto_key] = {"ativa": True, "preco": p, "margem": m}
+
+        return (
+            False, no_update, no_update, no_update, no_update, no_update,
+            mkt_open, no_update, no_update, no_update,
+            no_update, sim
+        )
+
+    # ---------- SALVAR / RESET MKT ----------
+    if trig in ("mkt-save", "mkt-reset"):
+        if not produto_key:
+            return (
+                fin_open, no_update, no_update, no_update, no_update, no_update,
+                mkt_open, no_update, no_update, no_update,
+                no_update, no_update
+            )
+
+        if trig == "mkt-reset":
+            sim["conc"].pop(produto_key, None)
+            return (
+                fin_open, no_update, no_update, no_update, no_update, no_update,
+                False, no_update, no_update, no_update,
+                no_update, sim
+            )
+
+        # mkt-save
+        d = _parse_float(mkt_delta, 0.0) / 100.0
+        sim["conc"][produto_key] = {"ativa": True, "delta": d}
+
+        return (
+            fin_open, no_update, no_update, no_update, no_update, no_update,
+            False, no_update, no_update, no_update,
+            no_update, sim
+        )
+
+    # ---------- ABRIR (duplo clique) ----------
+    meta_t1_atual = _safe_float_percent(meta_t1, 0.30)
+    meta_t2_atual = _safe_float_percent(meta_t2, 0.00)
+
+    if trig == "grid-t1" and active_tab == "tab-1" and isinstance(cell1, dict):
+        row_grid = _row_from_event(cell1, rowData1)
+        if not row_grid:
+            return (
+                fin_open, no_update, no_update, no_update, no_update, no_update,
+                mkt_open, no_update, no_update, no_update,
+                {"produto_key": None}, no_update
+            )
+
+        produto_key = row_grid.get("_produto_key") or row_grid.get("id")
+        menor_conc = float(row_grid.get("_menor_conc", 0.0))
+        p_atual = float(row_grid.get("_p_atual", 0.0))
+
+        sim_manual_ativa = bool(row_grid.get("_sim_manual_ativa", False))
+        sim_preco_man = float(row_grid.get("_sim_preco_man", 0.0))
+        sim_marg_man = float(row_grid.get("_sim_marg_man", 0.0))
 
         if sim_manual_ativa:
             val_p = sim_preco_man
@@ -809,49 +921,41 @@ def modal_controller(cell1, cell2, fin_close, mkt_close, active_tab, meta_t1, me
             val_m = meta_t1_atual * 100.0
 
         custo_calc = float(calcular_custo_necessario(val_p, val_m / 100.0))
-
-        fin_title = f"Financeiro: {str(data.get('_produto_nome',''))[:30]}"
+        fin_title = f"Financeiro: {str(row_grid.get('_produto_nome',''))[:30]}"
 
         return (
             True, fin_title, f"{val_p:.2f}", f"{val_m:.1f}", f"{val_p:.2f}", f"{custo_calc:.2f}",
             False, "Simulação Mercado", "", "",
-            {"produto_key": produto_key}
+            {"produto_key": produto_key}, no_update
         )
 
-    # ---- Abrir Mercado (Tab 2) ----
-    if trig == "grid-t2" and active_tab == "tab-2" and cell2 and isinstance(cell2, dict):
-        data = cell2.get("data") or {}
-        produto_key = data.get("_produto_key")
-        if not produto_key:
+    if trig == "grid-t2" and active_tab == "tab-2" and isinstance(cell2, dict):
+        row_grid = _row_from_event(cell2, rowData2)
+        if not row_grid:
             return (
                 fin_open, no_update, no_update, no_update, no_update, no_update,
                 mkt_open, no_update, no_update, no_update,
-                {"produto_key": None}
+                no_update, no_update
             )
 
-        menor_conc = float(data.get("_menor_conc", 0.0))
+        produto_key = row_grid.get("_produto_key") or row_grid.get("id")
+        menor_conc = float(row_grid.get("_menor_conc", 0.0))
 
-        sim_conc_ativa = bool(data.get("_sim_conc_ativa", False))
-        sim_conc_delta = float(data.get("_sim_conc_delta", 0.0))
+        sim_conc_ativa = bool(row_grid.get("_sim_conc_ativa", False))
+        sim_conc_delta = float(row_grid.get("_sim_conc_delta", 0.0))
 
         delta_atual = sim_conc_delta if sim_conc_ativa else meta_t2_atual
 
-        mkt_title = f"Mercado: {str(data.get('_produto_nome',''))[:30]}"
+        mkt_title = f"Mercado: {str(row_grid.get('_produto_nome',''))[:30]}"
         mkt_menor = f"Menor Concorrente: R$ {menor_conc:,.2f}"
-        mkt_delta = f"{delta_atual*100.0:.1f}"
+        mkt_delta_str = f"{delta_atual*100.0:.1f}"
 
         return (
             False, "Simulação Fin.", "", "", "", "",
-            True, mkt_title, mkt_menor, mkt_delta,
-            {"produto_key": produto_key}
+            True, mkt_title, mkt_menor, mkt_delta_str,
+            {"produto_key": produto_key}, no_update
         )
 
-    # Nada a fazer
-    return (
-        fin_open, no_update, no_update, no_update, no_update, no_update,
-        mkt_open, no_update, no_update, no_update,
-        no_update
-    )
 
 # ---------- Atualização do preço estimado no modal mercado (quando delta muda) ----------
 @app.callback(
