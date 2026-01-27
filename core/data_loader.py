@@ -95,19 +95,17 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
     max_dt = df_raw["data_venda"].max()
     ref_month_start = pd.Timestamp(max_dt.year, max_dt.month, 1)
 
-    # Monta mapa "mês do config" -> timestamp real do mês
-    # Exemplo: LISTA_MESES_ANO = ["Jan", "Fev", ...] (ou similar)
-    # Vamos alinhar como "últimos 12 meses", onde o último item vira o mês ref.
-    # Se seu LISTA_MESES_ANO já é "Nov, Out, ..." etc, ainda funciona porque usamos
-    # a ORDEM do LISTA_MESES_ANO como a ordem desejada.
-    if len(LISTA_MESES_ANO) != 12:
-        raise RuntimeError("LISTA_MESES_ANO precisa ter 12 itens para montar o Ano (12 meses).")
+    n = len(LISTA_MESES_ANO)
+    if n <= 0:
+        raise RuntimeError("LISTA_MESES_ANO está vazio no core.config.")
 
-    # Assumimos que LISTA_MESES_ANO representa os 12 meses terminando no mês ref.
-    # i=0 => 11 meses atrás ... i=11 => mês ref
+    logger.info("LISTA_MESES_ANO possui %d itens (ano-móvel).", n)
+
+    # Assumimos que LISTA_MESES_ANO representa os 'n' meses terminando no mês ref.
+    # i=0 => (n-1) meses atrás ... i=(n-1) => mês ref
     month_ts_by_label: Dict[str, pd.Timestamp] = {}
     for i, label in enumerate(LISTA_MESES_ANO):
-        offset_months = i - (len(LISTA_MESES_ANO) - 1)
+        offset_months = i - (n - 1)
         month_ts_by_label[label] = (ref_month_start + pd.DateOffset(months=offset_months)).normalize()
 
     # Cria coluna "mes" (início do mês) para pivotar
