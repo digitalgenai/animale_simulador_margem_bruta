@@ -135,14 +135,14 @@ def load_base_data() -> Tuple[
             f"LISTA_MESES_ANO={LISTA_MESES_ANO}"
         )
     
-    MESES_3M_LOCAL = LISTA_MESES_ANO[-3:]
-    MESES_6M_LOCAL = LISTA_MESES_ANO[-6:]
+    MESES_3M_USO = LISTA_MESES_ANO[-3:]
+    MESES_6M_USO = LISTA_MESES_ANO[-6:]
 
-    cols_fat_3m  = [f"Fat_{m}" for m in MESES_3M_LOCAL]
-    cols_marg_3m = [f"Marg_Val_{m}" for m in MESES_3M_LOCAL]
+    cols_fat_3m  = [f"Fat_{m}" for m in MESES_3M_USO]
+    cols_marg_3m = [f"Marg_Val_{m}" for m in MESES_3M_USO]
 
-    cols_fat_6m  = [f"Fat_{m}" for m in MESES_6M_LOCAL]
-    cols_marg_6m = [f"Marg_Val_{m}" for m in MESES_6M_LOCAL]
+    cols_fat_6m  = [f"Fat_{m}" for m in MESES_6M_USO]
+    cols_marg_6m = [f"Marg_Val_{m}" for m in MESES_6M_USO]
 
     if n <= 0:
         raise RuntimeError("LISTA_MESES_ANO está vazio no core.config.")
@@ -288,6 +288,21 @@ def load_base_data() -> Tuple[
 
     # Curva ABC
     df_base["Curva_ABC"] = _calc_curva_abc(df_base, "Fat_Total_Trimestre")
+
+    # escolhe o mês-ref como o último mês (label) que realmente tem venda
+    mes_ref_label = None
+    for m in reversed(LISTA_MESES_ANO):
+        fat_m = f"Fat_{m}"
+        qtd_m = f"Qtd_{m}"
+        if fat_m in df_base.columns and df_base[fat_m].sum() > 0:
+            mes_ref_label = m
+            break
+        if qtd_m in df_base.columns and df_base[qtd_m].sum() > 0:
+            mes_ref_label = m
+            break
+
+    if mes_ref_label is None:
+        mes_ref_label = LISTA_MESES_ANO[-1]
 
     # ==== Deriva colunas do mês ref (último label) ====
     mes_ref_label = LISTA_MESES_ANO[-1]
