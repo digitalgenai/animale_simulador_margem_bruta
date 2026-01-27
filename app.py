@@ -1044,8 +1044,4 @@ def export_excel(_, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_store):
 
 
 if __name__ == "__main__":
-    # Local:
-    app.run(debug=True, host="127.0.0.1", port=8050)
-
-    # Para publicar na rede (LAN/servidor):
-    # app.run(debug=False, host="0.0.0.0", port=8050)
+    app.run(debug=False, host="0.0.0.0", port=8050)
