@@ -16,8 +16,8 @@ from core.config import (
     BASE_NUM_COLS,
     AUX_NUM_COLS,
     LISTA_MESES_ANO,
-    MESES_6M,
-    MESES_3M,
+    MESES_6M,  # mantido por compat (mesmo não usando diretamente aqui)
+    MESES_3M,  # mantido por compat (mesmo não usando diretamente aqui)
     SIM_COLS_DEFAULTS,
     col_conc_1,
     col_conc_2,
@@ -43,12 +43,14 @@ _MONTH_CTX: Dict[str, object] = {
 }
 
 _PT_ABBR = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+_PT_ABBR_SET = {m.lower() for m in _PT_ABBR}
 
 
 def get_month_context() -> Dict[str, object]:
     """
     Retorna o contexto de meses calculado no último load_base_data().
-    Use isso nos plots/callbacks no lugar de depender cegamente de LISTA_MESES_ANO/MESES_3M/MESES_6M do config.
+
+    Use isso em plots/callbacks no lugar de depender cegamente de LISTA_MESES_ANO/MESES_3M/MESES_6M do config.
     """
     return dict(_MONTH_CTX)
 
@@ -112,7 +114,7 @@ def _labels_safe_from_ts(months_ts: List[pd.Timestamp]) -> List[str]:
 
 def _looks_like_iso_label(s: str) -> bool:
     # "2026-01" ou "2026_01"
-    return bool(re.match(r"^\d{4}[-_]\d{2}$", s.strip()))
+    return bool(re.match(r"^\d{4}[-_]\d{2}$", str(s).strip()))
 
 
 def _normalize_case_like(src: str, target: str) -> str:
@@ -135,10 +137,8 @@ def _rotate_legacy_labels_to_start(
     if not legacy_labels:
         return None
 
-    # tenta descobrir se parece lista de meses PT (qualquer casing)
-    # pegando o mês do start e tentando achar dentro da lista
     start_abbr = _PT_ABBR[start_month.month - 1]
-    # tenta achar o index comparando case-insensitive
+
     idx = None
     for i, lab in enumerate(legacy_labels):
         if str(lab).strip().lower() == start_abbr.lower():
@@ -148,18 +148,21 @@ def _rotate_legacy_labels_to_start(
     if idx is None:
         return None
 
-    # rotaciona
     rot = legacy_labels[idx:] + legacy_labels[:idx]
-    # e garante que o casing do primeiro elemento "caseie" com o que veio no config
+
+    # garante casing coerente para labels que parecem meses PT
     rot0 = str(rot[0])
-    rot = [_normalize_case_like(rot0, _PT_ABBR[(start_month.month - 1 + j) % 12]) if str(x).strip().lower() in [m.lower() for m in _PT_ABBR] else str(x) for j, x in enumerate(rot)]
-    return rot
+    out: List[str] = []
+    for j, x in enumerate(rot):
+        sx = str(x).strip()
+        if sx.lower() in _PT_ABBR_SET:
+            out.append(_normalize_case_like(rot0, _PT_ABBR[(start_month.month - 1 + j) % 12]))
+        else:
+            out.append(sx)
+    return out
 
 
-def _build_labels_legacy(
-    start_month: pd.Timestamp,
-    n: int,
-) -> List[str]:
+def _build_labels_legacy(start_month: pd.Timestamp, n: int) -> List[str]:
     """
     Labels "legado" compatíveis com o resto do app:
     - Se LISTA_MESES_ANO existir e for usável: alinha/rotaciona pra janela real.
@@ -168,6 +171,7 @@ def _build_labels_legacy(
     # 1) tentar usar LISTA_MESES_ANO do config (sem quebrar janeiro)
     if isinstance(LISTA_MESES_ANO, (list, tuple)) and len(LISTA_MESES_ANO) >= n:
         base = [str(x).strip() for x in LISTA_MESES_ANO[:n]]
+
         # se for ISO, não compensa "rotacionar", deixa como está
         if all(_looks_like_iso_label(x) for x in base):
             # mas converte "-" -> "_" pra não matar JS
@@ -201,6 +205,19 @@ def _dedupe_labels(labels: List[str]) -> List[str]:
             seen[k] += 1
             out.append(f"{k}_{seen[k]}")
     return out
+
+
+def _reset_pivot_index_to_sku(df_pvt: pd.DataFrame) -> pd.DataFrame:
+    """
+    Garante que o pivot resetado tenha coluna SKU (robusto contra index sem nome).
+    """
+    out = df_pvt.reset_index()
+    if "cod_produto" in out.columns:
+        return out.rename(columns={"cod_produto": "SKU"})
+    if "index" in out.columns:
+        return out.rename(columns={"index": "SKU"})
+    # fallback: assume primeira coluna é o índice
+    return out.rename(columns={out.columns[0]: "SKU"})
 
 
 # ======================================================================================
@@ -389,11 +406,12 @@ def load_base_data() -> Tuple[
     marg_pvt.columns = [f"Marg_Val_{c}" for c in marg_pvt.columns]
     qtd_pvt.columns = [f"Qtd_{c}" for c in qtd_pvt.columns]
 
-    # Junta dimensões + pivots
+    # Junta dimensões + pivots (robusto com index name)
     df_base = (
-        base_dim.merge(fat_pvt.reset_index().rename(columns={"cod_produto": "SKU"}), on="SKU", how="left")
-        .merge(marg_pvt.reset_index().rename(columns={"cod_produto": "SKU"}), on="SKU", how="left")
-        .merge(qtd_pvt.reset_index().rename(columns={"cod_produto": "SKU"}), on="SKU", how="left")
+        base_dim
+        .merge(_reset_pivot_index_to_sku(fat_pvt), on="SKU", how="left")
+        .merge(_reset_pivot_index_to_sku(marg_pvt), on="SKU", how="left")
+        .merge(_reset_pivot_index_to_sku(qtd_pvt), on="SKU", how="left")
     )
 
     # ----------------------------------------------------------------------------------
@@ -492,7 +510,7 @@ def load_base_data() -> Tuple[
     df_base["ABC"] = df_base["Curva_ABC"]
     df_base["Categ"] = df_base["Area"]
 
-    # Mês-ref: último legacy com venda
+    # Mês-ref: último legacy com venda (fat ou qtd)
     mes_ref_label = None
     for m in reversed(labels_legacy):
         fat_m = f"Fat_{m}"
@@ -530,7 +548,7 @@ def load_base_data() -> Tuple[
     df_base["Marg_Unit"] = _safe_div(df_base[marg_ref], df_base[qtd_ref])
     df_base["Marg_Perc"] = _safe_div(df_base[marg_ref], df_base[fat_ref])
 
-    # Aliases “humanos”
+    # Aliases “humanos” (grid)
     df_base["Qtd Nov"] = df_base["Qtd_Nov"]
     df_base["Preço Atual"] = df_base["Preco_Atual"]
     df_base["Marg R$"] = df_base["Marg_Unit"]
