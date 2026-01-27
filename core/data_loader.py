@@ -64,8 +64,19 @@ def _month_index(ts: pd.Series, start_month: pd.Timestamp) -> pd.Series:
       start_month + 1 mês => 1
       ...
     """
-    # ts precisa estar como Timestamp normalizado no 1º dia do mês
     return (ts.dt.year - start_month.year) * 12 + (ts.dt.month - start_month.month)
+
+
+def _build_month_labels(start_month: pd.Timestamp, n: int) -> List[str]:
+    """
+    Gera labels estáveis e ordenáveis para os meses da janela, por exemplo: "2025-02", ... "2026-01".
+    Isso elimina bug de Janeiro (e qualquer mês) por desalinhamento de lista fixa.
+    """
+    labels: List[str] = []
+    for i in range(n):
+        dt = (start_month + pd.DateOffset(months=i)).normalize()
+        labels.append(dt.strftime("%Y-%m"))
+    return labels
 
 
 def load_base_data() -> Tuple[
@@ -121,40 +132,31 @@ def load_base_data() -> Tuple[
 
     # Mês de referência: mês mais recente do dataset
     max_dt = df_raw["data_venda"].max()
+    if pd.isna(max_dt):
+        df_base = pd.DataFrame()
+        return df_base, {}, {}, {}, ["SEM DADOS"], []
+
     ref_month_start = pd.Timestamp(max_dt.year, max_dt.month, 1).normalize()
 
-    n = len(LISTA_MESES_ANO)
-
-    missing_3m = [m for m in MESES_3M if m not in LISTA_MESES_ANO]
-    missing_6m = [m for m in MESES_6M if m not in LISTA_MESES_ANO]
-    if missing_3m or missing_6m:
-        raise RuntimeError(
-            f"Config de meses inconsistente. "
-            f"MESES_3M faltando em LISTA_MESES_ANO={missing_3m}; "
-            f"MESES_6M faltando em LISTA_MESES_ANO={missing_6m}; "
-            f"LISTA_MESES_ANO={LISTA_MESES_ANO}"
-        )
-    
-    MESES_3M_USO = LISTA_MESES_ANO[-3:]
-    MESES_6M_USO = LISTA_MESES_ANO[-6:]
-
-    cols_fat_3m  = [f"Fat_{m}" for m in MESES_3M_USO]
-    cols_marg_3m = [f"Marg_Val_{m}" for m in MESES_3M_USO]
-
-    cols_fat_6m  = [f"Fat_{m}" for m in MESES_6M_USO]
-    cols_marg_6m = [f"Marg_Val_{m}" for m in MESES_6M_USO]
-
+    # Tamanho da janela (ano-móvel): se LISTA_MESES_ANO existir, usa o tamanho dela.
+    # Se quiser sempre 12, coloque n=12.
+    n = len(LISTA_MESES_ANO) if isinstance(LISTA_MESES_ANO, (list, tuple)) and len(LISTA_MESES_ANO) > 0 else 12
     if n <= 0:
-        raise RuntimeError("LISTA_MESES_ANO está vazio no core.config.")
+        raise RuntimeError("LISTA_MESES_ANO está vazio e n não pôde ser inferido.")
 
     start_month = (ref_month_start - pd.DateOffset(months=n - 1)).normalize()
 
+    # Labels REAIS da janela (estáveis)
+    LISTA_MESES_ANO_USO = _build_month_labels(start_month, n)
+    MESES_3M_USO = LISTA_MESES_ANO_USO[-3:]
+    MESES_6M_USO = LISTA_MESES_ANO_USO[-6:]
+
     logger.info(
-        "Janela ano-móvel: start=%s ref=%s (n=%d). Labels=%s",
+        "Janela ano-móvel: start=%s ref=%s (n=%d). Labels(USO)=%s",
         start_month.date(),
         ref_month_start.date(),
         n,
-        LISTA_MESES_ANO,
+        LISTA_MESES_ANO_USO,
     )
 
     # Coluna "mes" (início do mês)
@@ -167,7 +169,6 @@ def load_base_data() -> Tuple[
     df_win = df_raw[(df_raw["mes_idx"] >= 0) & (df_raw["mes_idx"] < n)].copy()
 
     if df_win.empty:
-        # Isso não deveria acontecer, mas se acontecer, loga o motivo com range real do dataset
         min_mes = df_raw["mes"].min()
         max_mes = df_raw["mes"].max()
         logger.warning(
@@ -180,9 +181,9 @@ def load_base_data() -> Tuple[
         df_base = pd.DataFrame()
         return df_base, {}, {}, {}, ["SEM DADOS"], []
 
-    # cria label via posição (robusto)
-    labels = np.array(LISTA_MESES_ANO, dtype=object)
-    df_win["mes_label"] = labels[df_win["mes_idx"].astype(int).to_numpy()]
+    # cria label via posição, mas usando labels da janela REAL (não config fixo)
+    labels_arr = np.array(LISTA_MESES_ANO_USO, dtype=object)
+    df_win["mes_label"] = labels_arr[df_win["mes_idx"].astype(int).to_numpy()]
 
     # Agrega por SKU x mês
     grp = (
@@ -215,8 +216,8 @@ def load_base_data() -> Tuple[
     marg_pvt = grp.pivot_table(index="cod_produto", columns="mes_label", values="Marg_Val", aggfunc="sum").fillna(0.0)
     qtd_pvt = grp.pivot_table(index="cod_produto", columns="mes_label", values="Qtd", aggfunc="sum").fillna(0.0)
 
-    # garante todas as colunas na ordem do config
-    for m in LISTA_MESES_ANO:
+    # garante todas as colunas na ordem da janela REAL
+    for m in LISTA_MESES_ANO_USO:
         if m not in fat_pvt.columns:
             fat_pvt[m] = 0.0
         if m not in marg_pvt.columns:
@@ -224,9 +225,9 @@ def load_base_data() -> Tuple[
         if m not in qtd_pvt.columns:
             qtd_pvt[m] = 0.0
 
-    fat_pvt = fat_pvt[LISTA_MESES_ANO]
-    marg_pvt = marg_pvt[LISTA_MESES_ANO]
-    qtd_pvt = qtd_pvt[LISTA_MESES_ANO]
+    fat_pvt = fat_pvt[LISTA_MESES_ANO_USO]
+    marg_pvt = marg_pvt[LISTA_MESES_ANO_USO]
+    qtd_pvt = qtd_pvt[LISTA_MESES_ANO_USO]
 
     fat_pvt.columns = [f"Fat_{c}" for c in fat_pvt.columns]
     marg_pvt.columns = [f"Marg_Val_{c}" for c in marg_pvt.columns]
@@ -254,9 +255,9 @@ def load_base_data() -> Tuple[
         else:
             df_base[col] = "-"
 
-    # Numéricos: BASE_NUM_COLS + Fat_ + Marg_Val_ + Qtd_
+    # Numéricos: BASE_NUM_COLS + Fat_ + Marg_Val_ + Qtd_ (da janela REAL)
     cols_num = list(BASE_NUM_COLS)
-    for m in LISTA_MESES_ANO:
+    for m in LISTA_MESES_ANO_USO:
         cols_num.extend([f"Fat_{m}", f"Marg_Val_{m}", f"Qtd_{m}"])
 
     _ensure_columns(df_base, cols_num, 0.0)
@@ -271,9 +272,9 @@ def load_base_data() -> Tuple[
     if col_conc_2 not in df_base.columns:
         df_base[col_conc_2] = 0.0
 
-    # ==== Totais trimestre ====
-    cols_fat_3m = [f"Fat_{m}" for m in MESES_3M]
-    cols_marg_3m = [f"Marg_Val_{m}" for m in MESES_3M]
+    # ==== Totais trimestre (3M REAL) ====
+    cols_fat_3m = [f"Fat_{m}" for m in MESES_3M_USO]
+    cols_marg_3m = [f"Marg_Val_{m}" for m in MESES_3M_USO]
     _ensure_columns(df_base, cols_fat_3m, 0.0)
     _ensure_columns(df_base, cols_marg_3m, 0.0)
 
@@ -281,30 +282,28 @@ def load_base_data() -> Tuple[
     df_base["Valor_Margem_Total_Trimestre"] = df_base[cols_marg_3m].sum(axis=1)
 
     df_base["Margem_Media_Trimestre"] = (
-        (df_base["Valor_Margem_Total_Trimestre"] / df_base["Fat_Total_Trimestre"])
-        .fillna(0.0)
-        .replace([pd.NA, float("inf"), float("-inf")], 0.0)
+        _safe_div(df_base["Valor_Margem_Total_Trimestre"], df_base["Fat_Total_Trimestre"])
     )
 
     # Curva ABC
     df_base["Curva_ABC"] = _calc_curva_abc(df_base, "Fat_Total_Trimestre")
 
-    # escolhe o mês-ref como o último mês (label) que realmente tem venda
+    # escolhe o mês-ref como o último mês (label) que realmente tem venda (na janela REAL)
     mes_ref_label = None
-    for m in reversed(LISTA_MESES_ANO):
+    for m in reversed(LISTA_MESES_ANO_USO):
         fat_m = f"Fat_{m}"
         qtd_m = f"Qtd_{m}"
-        if fat_m in df_base.columns and df_base[fat_m].sum() > 0:
+        if fat_m in df_base.columns and float(df_base[fat_m].sum()) > 0:
             mes_ref_label = m
             break
-        if qtd_m in df_base.columns and df_base[qtd_m].sum() > 0:
+        if qtd_m in df_base.columns and float(df_base[qtd_m].sum()) > 0:
             mes_ref_label = m
             break
 
     if mes_ref_label is None:
-        mes_ref_label = LISTA_MESES_ANO[-1]
+        mes_ref_label = LISTA_MESES_ANO_USO[-1]
 
-    # ==== Deriva colunas do mês ref (último label) ====
+    # ==== Deriva colunas do mês ref ====
     fat_ref = f"Fat_{mes_ref_label}"
     marg_ref = f"Marg_Val_{mes_ref_label}"
     qtd_ref = f"Qtd_{mes_ref_label}"
@@ -313,7 +312,15 @@ def load_base_data() -> Tuple[
 
     _ensure_columns(df_base, [fat_ref, marg_ref, qtd_ref], 0.0)
 
-    logger.info("sum(%s)=%.2f | sum(%s)=%.2f", fat_ref, df_base[fat_ref].sum(), qtd_ref, df_base[qtd_ref].sum())
+    logger.info(
+        "sum(%s)=%.2f | sum(%s)=%.2f | raw_total=%.2f raw_qtd=%d",
+        fat_ref,
+        float(df_base[fat_ref].sum()),
+        qtd_ref,
+        float(df_base[qtd_ref].sum()),
+        float(df_raw["total_item"].sum()),
+        int(df_raw["qtd_venda"].sum()),
+    )
 
     df_base["Qtd_Nov"] = df_base[qtd_ref].fillna(0.0).astype(int)
     df_base["Preco_Atual"] = _safe_div(df_base[fat_ref], df_base[qtd_ref])
@@ -321,7 +328,7 @@ def load_base_data() -> Tuple[
     df_base["Marg_Unit"] = _safe_div(df_base[marg_ref], df_base[qtd_ref])
     df_base["Marg_Perc"] = _safe_div(df_base[marg_ref], df_base[fat_ref])
 
-    # Aliases “humanos” (pra qualquer parte do front que leia nome literal)
+    # Aliases “humanos”
     df_base["Qtd Nov"] = df_base["Qtd_Nov"]
     df_base["Preço Atual"] = df_base["Preco_Atual"]
     df_base["Marg R$"] = df_base["Marg_Unit"]
@@ -331,10 +338,10 @@ def load_base_data() -> Tuple[
     # --- Benchmarks globais ---
     logger.info("Calculando Benchmarks Globais...")
 
-    cols_fat_ano = [f"Fat_{m}" for m in LISTA_MESES_ANO]
-    cols_marg_ano = [f"Marg_Val_{m}" for m in LISTA_MESES_ANO]
-    cols_fat_6m = [f"Fat_{m}" for m in MESES_6M]
-    cols_marg_6m = [f"Marg_Val_{m}" for m in MESES_6M]
+    cols_fat_ano = [f"Fat_{m}" for m in LISTA_MESES_ANO_USO]
+    cols_marg_ano = [f"Marg_Val_{m}" for m in LISTA_MESES_ANO_USO]
+    cols_fat_6m = [f"Fat_{m}" for m in MESES_6M_USO]
+    cols_marg_6m = [f"Marg_Val_{m}" for m in MESES_6M_USO]
 
     _ensure_columns(df_base, cols_fat_ano, 0.0)
     _ensure_columns(df_base, cols_marg_ano, 0.0)
@@ -349,7 +356,14 @@ def load_base_data() -> Tuple[
     df_base["Temp_Marg_3M"] = df_base[cols_marg_3m].sum(axis=1)
 
     df_bench = df_base.groupby("Area")[
-        ["Temp_Fat_Ano", "Temp_Marg_Ano", "Temp_Fat_6M", "Temp_Marg_6M", "Temp_Fat_3M", "Temp_Marg_3M"]
+        [
+            "Temp_Fat_Ano",
+            "Temp_Marg_Ano",
+            "Temp_Fat_6M",
+            "Temp_Marg_6M",
+            "Temp_Fat_3M",
+            "Temp_Marg_3M",
+        ]
     ].sum()
 
     df_bench["Bench_Ano"] = _safe_div(df_bench["Temp_Marg_Ano"], df_bench["Temp_Fat_Ano"])
@@ -400,7 +414,7 @@ def load_base_data() -> Tuple[
     lista_fornecedores = forn_ranking.index.tolist() or ["SEM DADOS"]
     lista_categorias_global = sorted(df_base["Area"].astype(str).unique().tolist())
 
-    # Log “prova de vida” (pra você bater com o SKU do exemplo)
+    # Log “prova de vida”
     try:
         sku_teste = "68056903"
         ex = df_base[df_base["SKU"].astype(str) == sku_teste].head(1)
