@@ -124,6 +124,26 @@ def load_base_data() -> Tuple[
     ref_month_start = pd.Timestamp(max_dt.year, max_dt.month, 1).normalize()
 
     n = len(LISTA_MESES_ANO)
+
+    missing_3m = [m for m in MESES_3M if m not in LISTA_MESES_ANO]
+    missing_6m = [m for m in MESES_6M if m not in LISTA_MESES_ANO]
+    if missing_3m or missing_6m:
+        raise RuntimeError(
+            f"Config de meses inconsistente. "
+            f"MESES_3M faltando em LISTA_MESES_ANO={missing_3m}; "
+            f"MESES_6M faltando em LISTA_MESES_ANO={missing_6m}; "
+            f"LISTA_MESES_ANO={LISTA_MESES_ANO}"
+        )
+    
+    MESES_3M_LOCAL = LISTA_MESES_ANO[-3:]
+    MESES_6M_LOCAL = LISTA_MESES_ANO[-6:]
+
+    cols_fat_3m  = [f"Fat_{m}" for m in MESES_3M_LOCAL]
+    cols_marg_3m = [f"Marg_Val_{m}" for m in MESES_3M_LOCAL]
+
+    cols_fat_6m  = [f"Fat_{m}" for m in MESES_6M_LOCAL]
+    cols_marg_6m = [f"Marg_Val_{m}" for m in MESES_6M_LOCAL]
+
     if n <= 0:
         raise RuntimeError("LISTA_MESES_ANO está vazio no core.config.")
 
@@ -274,7 +294,12 @@ def load_base_data() -> Tuple[
     fat_ref = f"Fat_{mes_ref_label}"
     marg_ref = f"Marg_Val_{mes_ref_label}"
     qtd_ref = f"Qtd_{mes_ref_label}"
+
+    logger.info("mes_ref_label=%s | fat_ref=%s | qtd_ref=%s", mes_ref_label, fat_ref, qtd_ref)
+
     _ensure_columns(df_base, [fat_ref, marg_ref, qtd_ref], 0.0)
+
+    logger.info("sum(%s)=%.2f | sum(%s)=%.2f", fat_ref, df_base[fat_ref].sum(), qtd_ref, df_base[qtd_ref].sum())
 
     df_base["Qtd_Nov"] = df_base[qtd_ref].fillna(0.0).astype(int)
     df_base["Preco_Atual"] = _safe_div(df_base[fat_ref], df_base[qtd_ref])
