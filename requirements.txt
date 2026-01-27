@@ -1,6 +1,9 @@
 pandas
 numpy
 openpyxl
+python-dotenv
+sqlalchemy
+psycopg2-binary
 dash
 dash-bootstrap-components
 dash-ag-grid
