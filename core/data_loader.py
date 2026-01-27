@@ -39,10 +39,6 @@ def _safe_div(n: pd.Series, d: pd.Series) -> pd.Series:
 
 
 def _calc_curva_abc(df_prod: pd.DataFrame, fat_col: str) -> pd.Series:
-    """
-    Curva ABC por contribuição acumulada do faturamento.
-    A: até 80%, B: 80-95%, C: restante.
-    """
     if fat_col not in df_prod.columns:
         return pd.Series(index=df_prod.index, data="C")
 
@@ -58,27 +54,35 @@ def _calc_curva_abc(df_prod: pd.DataFrame, fat_col: str) -> pd.Series:
     abc.loc[acum <= 0.80] = "A"
     abc.loc[(acum > 0.80) & (acum <= 0.95)] = "B"
     abc.loc[acum > 0.95] = "C"
-
     return abc.reindex(df_prod.index).fillna("C")
 
 
-def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], Dict[str, float], List[str], List[str]]:
+def _month_index(ts: pd.Series, start_month: pd.Timestamp) -> pd.Series:
     """
-    Carrega e prepara df_base + benchmarks a partir do Postgres (stage.obt_faturamento),
-    mantendo o MESMO "contrato" do loader do Excel.
+    Retorna o índice de mês (inteiro) relativo a start_month:
+      start_month => 0
+      start_month + 1 mês => 1
+      ...
+    """
+    # ts precisa estar como Timestamp normalizado no 1º dia do mês
+    return (ts.dt.year - start_month.year) * 12 + (ts.dt.month - start_month.month)
 
-    Retorna:
-      df_base (index Produto_Key)
-      bench_ano, bench_6m, bench_3m (dict por Area)
-      lista_fornecedores (ranking)
-      lista_categorias_global (sorted unique de Area)
-    """
+
+def load_base_data() -> Tuple[
+    pd.DataFrame,
+    Dict[str, float],
+    Dict[str, float],
+    Dict[str, float],
+    List[str],
+    List[str],
+]:
     load_dotenv()
 
     schema = os.getenv("PGSCHEMA", "stage")
     table = os.getenv("PGTABLE", "obt_faturamento")
+    full = f"{schema}.{table}"
 
-    logger.info("Carregando base do Postgres: %s.%s", schema, table)
+    logger.info("Carregando base do Postgres: %s", full)
 
     engine = get_engine()
 
@@ -94,7 +98,7 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
             qtd_venda,
             total_item,
             lucro_total
-        FROM {schema}.{table}
+        FROM {full}
         WHERE data_venda IS NOT NULL
         """
     )
@@ -117,26 +121,52 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
 
     # Mês de referência: mês mais recente do dataset
     max_dt = df_raw["data_venda"].max()
-    ref_month_start = pd.Timestamp(max_dt.year, max_dt.month, 1)
+    ref_month_start = pd.Timestamp(max_dt.year, max_dt.month, 1).normalize()
 
     n = len(LISTA_MESES_ANO)
     if n <= 0:
         raise RuntimeError("LISTA_MESES_ANO está vazio no core.config.")
 
-    logger.info("LISTA_MESES_ANO possui %d itens (ano-móvel).", n)
+    start_month = (ref_month_start - pd.DateOffset(months=n - 1)).normalize()
 
-    # Mapa label -> timestamp (início do mês)
-    month_ts_by_label: Dict[str, pd.Timestamp] = {}
-    for i, label in enumerate(LISTA_MESES_ANO):
-        offset_months = i - (n - 1)  # i=0 => n-1 meses atrás ... i=n-1 => mês ref
-        month_ts_by_label[label] = (ref_month_start + pd.DateOffset(months=offset_months)).normalize()
+    logger.info(
+        "Janela ano-móvel: start=%s ref=%s (n=%d). Labels=%s",
+        start_month.date(),
+        ref_month_start.date(),
+        n,
+        LISTA_MESES_ANO,
+    )
 
     # Coluna "mes" (início do mês)
-    df_raw["mes"] = df_raw["data_venda"].dt.to_period("M").dt.to_timestamp()
+    df_raw["mes"] = df_raw["data_venda"].dt.to_period("M").dt.to_timestamp().dt.normalize()
+
+    # índice do mês dentro da janela [0..n-1]
+    df_raw["mes_idx"] = _month_index(df_raw["mes"], start_month)
+
+    # filtra somente meses dentro da janela
+    df_win = df_raw[(df_raw["mes_idx"] >= 0) & (df_raw["mes_idx"] < n)].copy()
+
+    if df_win.empty:
+        # Isso não deveria acontecer, mas se acontecer, loga o motivo com range real do dataset
+        min_mes = df_raw["mes"].min()
+        max_mes = df_raw["mes"].max()
+        logger.warning(
+            "Nenhuma linha caiu na janela [start=%s..ref=%s]. Range real mes=[%s..%s].",
+            start_month.date(),
+            ref_month_start.date(),
+            min_mes.date() if pd.notna(min_mes) else None,
+            max_mes.date() if pd.notna(max_mes) else None,
+        )
+        df_base = pd.DataFrame()
+        return df_base, {}, {}, {}, ["SEM DADOS"], []
+
+    # cria label via posição (robusto)
+    labels = np.array(LISTA_MESES_ANO, dtype=object)
+    df_win["mes_label"] = labels[df_win["mes_idx"].astype(int).to_numpy()]
 
     # Agrega por SKU x mês
     grp = (
-        df_raw.groupby(["cod_produto", "mes"], as_index=False)
+        df_win.groupby(["cod_produto", "mes_label"], as_index=False)
         .agg(
             Produto=("produto", "first"),
             Fornecedor=("fornecedor", "first"),
@@ -160,26 +190,12 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
         .rename(columns={"cod_produto": "SKU"})
     )
 
-    # Mapeia mes -> label do config
-    ts_to_label = {v: k for k, v in month_ts_by_label.items()}
-    grp["mes_label"] = grp["mes"].map(ts_to_label)
-    grp_range = grp[grp["mes_label"].notna()].copy()
+    # Pivots
+    fat_pvt = grp.pivot_table(index="cod_produto", columns="mes_label", values="Fat", aggfunc="sum").fillna(0.0)
+    marg_pvt = grp.pivot_table(index="cod_produto", columns="mes_label", values="Marg_Val", aggfunc="sum").fillna(0.0)
+    qtd_pvt = grp.pivot_table(index="cod_produto", columns="mes_label", values="Qtd", aggfunc="sum").fillna(0.0)
 
-    # Pivots: Fat, Marg_Val, Qtd
-    fat_pvt = (
-        grp_range.pivot_table(index="cod_produto", columns="mes_label", values="Fat", aggfunc="sum")
-        .fillna(0.0)
-    )
-    marg_pvt = (
-        grp_range.pivot_table(index="cod_produto", columns="mes_label", values="Marg_Val", aggfunc="sum")
-        .fillna(0.0)
-    )
-    qtd_pvt = (
-        grp_range.pivot_table(index="cod_produto", columns="mes_label", values="Qtd", aggfunc="sum")
-        .fillna(0.0)
-    )
-
-    # Garante todas as colunas na ordem do config
+    # garante todas as colunas na ordem do config
     for m in LISTA_MESES_ANO:
         if m not in fat_pvt.columns:
             fat_pvt[m] = 0.0
@@ -211,10 +227,7 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
     for col in TEXT_COLS:
         if col in df_base.columns:
             df_base[col] = (
-                df_base[col]
-                .astype(str)
-                .str.strip()
-                .replace(["nan", "NaN", ""], "SEM_INFO")
+                df_base[col].astype(str).str.strip().replace(["nan", "NaN", ""], "SEM_INFO")
             )
             if col == "Cod_Barras":
                 df_base[col] = df_base[col].str.replace(r"\.0$", "", regex=True)
@@ -238,7 +251,7 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
     if col_conc_2 not in df_base.columns:
         df_base[col_conc_2] = 0.0
 
-    # ==== Totais trimestre (usa MESES_3M do config) ====
+    # ==== Totais trimestre ====
     cols_fat_3m = [f"Fat_{m}" for m in MESES_3M]
     cols_marg_3m = [f"Marg_Val_{m}" for m in MESES_3M]
     _ensure_columns(df_base, cols_fat_3m, 0.0)
@@ -253,30 +266,28 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
         .replace([pd.NA, float("inf"), float("-inf")], 0.0)
     )
 
-    # ==== Curva ABC (AGORA, depois do Fat_Total_Trimestre existir) ====
+    # Curva ABC
     df_base["Curva_ABC"] = _calc_curva_abc(df_base, "Fat_Total_Trimestre")
 
-    # ==== Deriva colunas do "mês ref" (último label do ano-móvel) ====
+    # ==== Deriva colunas do mês ref (último label) ====
     mes_ref_label = LISTA_MESES_ANO[-1]
     fat_ref = f"Fat_{mes_ref_label}"
     marg_ref = f"Marg_Val_{mes_ref_label}"
     qtd_ref = f"Qtd_{mes_ref_label}"
-
     _ensure_columns(df_base, [fat_ref, marg_ref, qtd_ref], 0.0)
 
-    # Nomes "canon" (sem acento/espaço)
     df_base["Qtd_Nov"] = df_base[qtd_ref].fillna(0.0).astype(int)
     df_base["Preco_Atual"] = _safe_div(df_base[fat_ref], df_base[qtd_ref])
-
-    # lucro_total = Fat - CustoTotal => CustoUnit = (Fat - Lucro)/Qtd
     df_base["Custo"] = _safe_div(df_base[fat_ref] - df_base[marg_ref], df_base[qtd_ref])
-
     df_base["Marg_Unit"] = _safe_div(df_base[marg_ref], df_base[qtd_ref])
     df_base["Marg_Perc"] = _safe_div(df_base[marg_ref], df_base[fat_ref])
 
-    # Aliases (caso algum builder/tela use nomes com espaço)
+    # Aliases “humanos” (pra qualquer parte do front que leia nome literal)
+    df_base["Qtd Nov"] = df_base["Qtd_Nov"]
+    df_base["Preço Atual"] = df_base["Preco_Atual"]
     df_base["Marg R$"] = df_base["Marg_Unit"]
     df_base["Marg %"] = df_base["Marg_Perc"]
+    df_base["Marg Atual %"] = df_base["Marg_Perc"]
 
     # --- Benchmarks globais ---
     logger.info("Calculando Benchmarks Globais...")
@@ -299,14 +310,7 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
     df_base["Temp_Marg_3M"] = df_base[cols_marg_3m].sum(axis=1)
 
     df_bench = df_base.groupby("Area")[
-        [
-            "Temp_Fat_Ano",
-            "Temp_Marg_Ano",
-            "Temp_Fat_6M",
-            "Temp_Marg_6M",
-            "Temp_Fat_3M",
-            "Temp_Marg_3M",
-        ]
+        ["Temp_Fat_Ano", "Temp_Marg_Ano", "Temp_Fat_6M", "Temp_Marg_6M", "Temp_Fat_3M", "Temp_Marg_3M"]
     ].sum()
 
     df_bench["Bench_Ano"] = _safe_div(df_bench["Temp_Marg_Ano"], df_bench["Temp_Fat_Ano"])
@@ -330,7 +334,7 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
         errors="ignore",
     )
 
-    # Índice por Produto (mantém comportamento)
+    # Índice por Produto
     df_base["Produto"] = df_base["Produto"].astype(str).str.strip()
     dupe_mask = df_base["Produto"].duplicated(keep=False)
 
@@ -354,11 +358,24 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
         .sum()
         .sort_values(ascending=False)
     )
-    lista_fornecedores = forn_ranking.index.tolist()
-    if not lista_fornecedores:
-        lista_fornecedores = ["SEM DADOS"]
-
+    lista_fornecedores = forn_ranking.index.tolist() or ["SEM DADOS"]
     lista_categorias_global = sorted(df_base["Area"].astype(str).unique().tolist())
+
+    # Log “prova de vida” (pra você bater com o SKU do exemplo)
+    try:
+        sku_teste = "68056903"
+        ex = df_base[df_base["SKU"].astype(str) == sku_teste].head(1)
+        if not ex.empty:
+            logger.info(
+                "PROVA SKU=%s => Qtd_Nov=%s Preco_Atual=%.2f Custo=%.2f Marg%%=%.2f",
+                sku_teste,
+                int(ex["Qtd_Nov"].iloc[0]),
+                float(ex["Preco_Atual"].iloc[0]),
+                float(ex["Custo"].iloc[0]),
+                float(ex["Marg_Perc"].iloc[0]) * 100.0,
+            )
+    except Exception:
+        pass
 
     logger.info("Base carregada do Postgres: %d linhas", len(df_base))
     return df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global
