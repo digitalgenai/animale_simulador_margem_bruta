@@ -38,6 +38,30 @@ def _safe_div(n: pd.Series, d: pd.Series) -> pd.Series:
     return out.replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
 
+def _calc_curva_abc(df_prod: pd.DataFrame, fat_col: str) -> pd.Series:
+    """
+    Curva ABC por contribuição acumulada do faturamento.
+    A: até 80%, B: 80-95%, C: restante.
+    """
+    if fat_col not in df_prod.columns:
+        return pd.Series(index=df_prod.index, data="C")
+
+    s = df_prod[fat_col].fillna(0.0).astype(float)
+    total = float(s.sum())
+    if total <= 0:
+        return pd.Series(index=df_prod.index, data="C")
+
+    order = s.sort_values(ascending=False)
+    acum = order.cumsum() / total
+
+    abc = pd.Series(index=order.index, dtype="object")
+    abc.loc[acum <= 0.80] = "A"
+    abc.loc[(acum > 0.80) & (acum <= 0.95)] = "B"
+    abc.loc[acum > 0.95] = "C"
+
+    return abc.reindex(df_prod.index).fillna("C")
+
+
 def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], Dict[str, float], List[str], List[str]]:
     """
     Carrega e prepara df_base + benchmarks a partir do Postgres (stage.obt_faturamento),
@@ -58,8 +82,8 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
 
     engine = get_engine()
 
-    # Lê os dados brutos (vendas) necessários para derivar as colunas do "modelo Excel"
-    sql = text(f"""
+    sql = text(
+        f"""
         SELECT
             cod_produto,
             produto,
@@ -72,14 +96,15 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
             lucro_total
         FROM {schema}.{table}
         WHERE data_venda IS NOT NULL
-    """)
+        """
+    )
     df_raw = pd.read_sql(sql, engine)
 
     if df_raw.empty:
         df_base = pd.DataFrame()
         return df_base, {}, {}, {}, ["SEM DADOS"], []
 
-    # Tipos
+    # Tipos / normalização
     df_raw["data_venda"] = pd.to_datetime(df_raw["data_venda"], errors="coerce")
     df_raw = df_raw.dropna(subset=["data_venda"]).copy()
 
@@ -87,11 +112,10 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
     df_raw["total_item"] = pd.to_numeric(df_raw["total_item"], errors="coerce").fillna(0.0)
     df_raw["lucro_total"] = pd.to_numeric(df_raw["lucro_total"], errors="coerce").fillna(0.0)
 
-    # Normaliza strings
     for c in ["cod_produto", "produto", "fornecedor", "fabricante", "area"]:
         df_raw[c] = df_raw[c].astype(str).fillna("").str.strip()
 
-    # Mês de referência: usa o mês mais recente do dataset
+    # Mês de referência: mês mais recente do dataset
     max_dt = df_raw["data_venda"].max()
     ref_month_start = pd.Timestamp(max_dt.year, max_dt.month, 1)
 
@@ -101,17 +125,16 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
 
     logger.info("LISTA_MESES_ANO possui %d itens (ano-móvel).", n)
 
-    # Assumimos que LISTA_MESES_ANO representa os 'n' meses terminando no mês ref.
-    # i=0 => (n-1) meses atrás ... i=(n-1) => mês ref
+    # Mapa label -> timestamp (início do mês)
     month_ts_by_label: Dict[str, pd.Timestamp] = {}
     for i, label in enumerate(LISTA_MESES_ANO):
-        offset_months = i - (n - 1)
+        offset_months = i - (n - 1)  # i=0 => n-1 meses atrás ... i=n-1 => mês ref
         month_ts_by_label[label] = (ref_month_start + pd.DateOffset(months=offset_months)).normalize()
 
-    # Cria coluna "mes" (início do mês) para pivotar
+    # Coluna "mes" (início do mês)
     df_raw["mes"] = df_raw["data_venda"].dt.to_period("M").dt.to_timestamp()
 
-    # Agrega por SKU x Mês (fat e marg_val)
+    # Agrega por SKU x mês
     grp = (
         df_raw.groupby(["cod_produto", "mes"], as_index=False)
         .agg(
@@ -125,7 +148,7 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
         )
     )
 
-    # Base por SKU (dimensões)
+    # Dimensões por SKU
     base_dim = (
         grp.groupby("cod_produto", as_index=False)
         .agg(
@@ -134,48 +157,57 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
             Fabricante=("Fabricante", "first"),
             Area=("Area", "first"),
         )
+        .rename(columns={"cod_produto": "SKU"})
     )
-    base_dim = base_dim.rename(columns={"cod_produto": "SKU"})
 
-    # Pivot Fat_{m} e Marg_Val_{m} seguindo LISTA_MESES_ANO
-    # Primeiro mapeia cada linha para o "label" do mês (se estiver dentro do range dos 12 meses)
+    # Mapeia mes -> label do config
     ts_to_label = {v: k for k, v in month_ts_by_label.items()}
     grp["mes_label"] = grp["mes"].map(ts_to_label)
+    grp_range = grp[grp["mes_label"].notna()].copy()
 
-    grp_12m = grp[grp["mes_label"].notna()].copy()
+    # Pivots: Fat, Marg_Val, Qtd
+    fat_pvt = (
+        grp_range.pivot_table(index="cod_produto", columns="mes_label", values="Fat", aggfunc="sum")
+        .fillna(0.0)
+    )
+    marg_pvt = (
+        grp_range.pivot_table(index="cod_produto", columns="mes_label", values="Marg_Val", aggfunc="sum")
+        .fillna(0.0)
+    )
+    qtd_pvt = (
+        grp_range.pivot_table(index="cod_produto", columns="mes_label", values="Qtd", aggfunc="sum")
+        .fillna(0.0)
+    )
 
-    fat_pvt = grp_12m.pivot_table(index="cod_produto", columns="mes_label", values="Fat", aggfunc="sum").fillna(0.0)
-    marg_pvt = grp_12m.pivot_table(index="cod_produto", columns="mes_label", values="Marg_Val", aggfunc="sum").fillna(0.0)
-
-    # Garante todas as colunas do ano na ordem do config
+    # Garante todas as colunas na ordem do config
     for m in LISTA_MESES_ANO:
         if m not in fat_pvt.columns:
             fat_pvt[m] = 0.0
         if m not in marg_pvt.columns:
             marg_pvt[m] = 0.0
+        if m not in qtd_pvt.columns:
+            qtd_pvt[m] = 0.0
 
     fat_pvt = fat_pvt[LISTA_MESES_ANO]
     marg_pvt = marg_pvt[LISTA_MESES_ANO]
+    qtd_pvt = qtd_pvt[LISTA_MESES_ANO]
 
     fat_pvt.columns = [f"Fat_{c}" for c in fat_pvt.columns]
     marg_pvt.columns = [f"Marg_Val_{c}" for c in marg_pvt.columns]
+    qtd_pvt.columns = [f"Qtd_{c}" for c in qtd_pvt.columns]
 
     # Junta dimensões + pivots
-    df_base = base_dim.merge(
-        fat_pvt.reset_index().rename(columns={"cod_produto": "SKU"}),
-        on="SKU",
-        how="left",
-    ).merge(
-        marg_pvt.reset_index().rename(columns={"cod_produto": "SKU"}),
-        on="SKU",
-        how="left",
+    df_base = (
+        base_dim.merge(fat_pvt.reset_index().rename(columns={"cod_produto": "SKU"}), on="SKU", how="left")
+        .merge(marg_pvt.reset_index().rename(columns={"cod_produto": "SKU"}), on="SKU", how="left")
+        .merge(qtd_pvt.reset_index().rename(columns={"cod_produto": "SKU"}), on="SKU", how="left")
     )
 
-    df_base.fillna(0.0, inplace=True)
+    # -------------------------
+    # Pipeline compatível Excel
+    # -------------------------
 
-    # --- A partir daqui, replica o seu pipeline atual do Excel ---
-
-    # Tratamento Textos (usa TEXT_COLS do config)
+    # Textos
     for col in TEXT_COLS:
         if col in df_base.columns:
             df_base[col] = (
@@ -189,14 +221,14 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
         else:
             df_base[col] = "-"
 
-    # Tratamento Numéricos: BASE_NUM_COLS + Fat_{m} + Marg_Val_{m}
+    # Numéricos: BASE_NUM_COLS + Fat_ + Marg_Val_ + Qtd_
     cols_num = list(BASE_NUM_COLS)
     for m in LISTA_MESES_ANO:
-        cols_num.extend([f"Fat_{m}", f"Marg_Val_{m}"])
+        cols_num.extend([f"Fat_{m}", f"Marg_Val_{m}", f"Qtd_{m}"])
 
     _ensure_columns(df_base, cols_num, 0.0)
     for col in cols_num:
-        df_base[col] = pd.to_numeric(df_base[col], errors="coerce").fillna(0)
+        df_base[col] = pd.to_numeric(df_base[col], errors="coerce").fillna(0.0)
 
     # Aux e concorrentes
     _ensure_columns(df_base, AUX_NUM_COLS, 0.0)
@@ -206,32 +238,58 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
     if col_conc_2 not in df_base.columns:
         df_base[col_conc_2] = 0.0
 
-    # ==== Recria os campos totais usados no simulador (se não vierem prontos) ====
-    # Trimestre = MESES_3M (normalmente últimos 3 do ano móvel)
+    # ==== Totais trimestre (usa MESES_3M do config) ====
     cols_fat_3m = [f"Fat_{m}" for m in MESES_3M]
     cols_marg_3m = [f"Marg_Val_{m}" for m in MESES_3M]
-
     _ensure_columns(df_base, cols_fat_3m, 0.0)
     _ensure_columns(df_base, cols_marg_3m, 0.0)
 
-    # Se seu Excel já tinha esses campos, aqui garantimos consistência.
     df_base["Fat_Total_Trimestre"] = df_base[cols_fat_3m].sum(axis=1)
     df_base["Valor_Margem_Total_Trimestre"] = df_base[cols_marg_3m].sum(axis=1)
 
-    # Margem média trimestre (igual ao original)
     df_base["Margem_Media_Trimestre"] = (
         (df_base["Valor_Margem_Total_Trimestre"] / df_base["Fat_Total_Trimestre"])
-        .fillna(0)
-        .replace([pd.NA, float("inf"), float("-inf")], 0)
+        .fillna(0.0)
+        .replace([pd.NA, float("inf"), float("-inf")], 0.0)
     )
 
-    # --- CÁLCULO DOS BENCHMARKS GLOBAIS (igual ao original) ---
+    # ==== Curva ABC (AGORA, depois do Fat_Total_Trimestre existir) ====
+    df_base["Curva_ABC"] = _calc_curva_abc(df_base, "Fat_Total_Trimestre")
+
+    # ==== Deriva colunas do "mês ref" (último label do ano-móvel) ====
+    mes_ref_label = LISTA_MESES_ANO[-1]
+    fat_ref = f"Fat_{mes_ref_label}"
+    marg_ref = f"Marg_Val_{mes_ref_label}"
+    qtd_ref = f"Qtd_{mes_ref_label}"
+
+    _ensure_columns(df_base, [fat_ref, marg_ref, qtd_ref], 0.0)
+
+    # Nomes "canon" (sem acento/espaço)
+    df_base["Qtd_Nov"] = df_base[qtd_ref].fillna(0.0).astype(int)
+    df_base["Preco_Atual"] = _safe_div(df_base[fat_ref], df_base[qtd_ref])
+
+    # lucro_total = Fat - CustoTotal => CustoUnit = (Fat - Lucro)/Qtd
+    df_base["Custo"] = _safe_div(df_base[fat_ref] - df_base[marg_ref], df_base[qtd_ref])
+
+    df_base["Marg_Unit"] = _safe_div(df_base[marg_ref], df_base[qtd_ref])
+    df_base["Marg_Perc"] = _safe_div(df_base[marg_ref], df_base[fat_ref])
+
+    # Aliases (caso algum builder/tela use nomes com espaço)
+    df_base["Marg R$"] = df_base["Marg_Unit"]
+    df_base["Marg %"] = df_base["Marg_Perc"]
+
+    # --- Benchmarks globais ---
     logger.info("Calculando Benchmarks Globais...")
 
     cols_fat_ano = [f"Fat_{m}" for m in LISTA_MESES_ANO]
     cols_marg_ano = [f"Marg_Val_{m}" for m in LISTA_MESES_ANO]
     cols_fat_6m = [f"Fat_{m}" for m in MESES_6M]
     cols_marg_6m = [f"Marg_Val_{m}" for m in MESES_6M]
+
+    _ensure_columns(df_base, cols_fat_ano, 0.0)
+    _ensure_columns(df_base, cols_marg_ano, 0.0)
+    _ensure_columns(df_base, cols_fat_6m, 0.0)
+    _ensure_columns(df_base, cols_marg_6m, 0.0)
 
     df_base["Temp_Fat_Ano"] = df_base[cols_fat_ano].sum(axis=1)
     df_base["Temp_Marg_Ano"] = df_base[cols_marg_ano].sum(axis=1)
@@ -240,43 +298,50 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
     df_base["Temp_Fat_3M"] = df_base[cols_fat_3m].sum(axis=1)
     df_base["Temp_Marg_3M"] = df_base[cols_marg_3m].sum(axis=1)
 
-    df_bench = df_base.groupby("Area")[[
-        "Temp_Fat_Ano", "Temp_Marg_Ano",
-        "Temp_Fat_6M", "Temp_Marg_6M",
-        "Temp_Fat_3M", "Temp_Marg_3M"
-    ]].sum()
+    df_bench = df_base.groupby("Area")[
+        [
+            "Temp_Fat_Ano",
+            "Temp_Marg_Ano",
+            "Temp_Fat_6M",
+            "Temp_Marg_6M",
+            "Temp_Fat_3M",
+            "Temp_Marg_3M",
+        ]
+    ].sum()
 
     df_bench["Bench_Ano"] = _safe_div(df_bench["Temp_Marg_Ano"], df_bench["Temp_Fat_Ano"])
     df_bench["Bench_6M"] = _safe_div(df_bench["Temp_Marg_6M"], df_bench["Temp_Fat_6M"])
     df_bench["Bench_3M"] = _safe_div(df_bench["Temp_Marg_3M"], df_bench["Temp_Fat_3M"])
 
-    bench_ano = df_bench["Bench_Ano"].fillna(0).replace([float("inf"), float("-inf")], 0).to_dict()
-    bench_6m = df_bench["Bench_6M"].fillna(0).replace([float("inf"), float("-inf")], 0).to_dict()
-    bench_3m = df_bench["Bench_3M"].fillna(0).replace([float("inf"), float("-inf")], 0).to_dict()
+    bench_ano = df_bench["Bench_Ano"].fillna(0.0).replace([float("inf"), float("-inf")], 0.0).to_dict()
+    bench_6m = df_bench["Bench_6M"].fillna(0.0).replace([float("inf"), float("-inf")], 0.0).to_dict()
+    bench_3m = df_bench["Bench_3M"].fillna(0.0).replace([float("inf"), float("-inf")], 0.0).to_dict()
 
-    # Drop temps
     df_base.drop(
         columns=[
-            "Temp_Fat_Ano", "Temp_Marg_Ano",
-            "Temp_Fat_6M", "Temp_Marg_6M",
-            "Temp_Fat_3M", "Temp_Marg_3M"
+            "Temp_Fat_Ano",
+            "Temp_Marg_Ano",
+            "Temp_Fat_6M",
+            "Temp_Marg_6M",
+            "Temp_Fat_3M",
+            "Temp_Marg_3M",
         ],
         inplace=True,
         errors="ignore",
     )
 
-    # --- Índice por Produto (mantém seu comportamento) ---
+    # Índice por Produto (mantém comportamento)
     df_base["Produto"] = df_base["Produto"].astype(str).str.strip()
     dupe_mask = df_base["Produto"].duplicated(keep=False)
 
     df_base["Produto_Key"] = df_base["Produto"]
     if dupe_mask.any():
         df_base.loc[dupe_mask, "Produto_Key"] = df_base.loc[dupe_mask].apply(
-            lambda r: f"{r['Produto']} [{r.get('SKU','SEM_INFO')}]",
-            axis=1
+            lambda r: f"{r['Produto']} [{r.get('SKU', 'SEM_INFO')}]",
+            axis=1,
         )
 
-    # Garante colunas de simulação existirem
+    # Garante colunas de simulação
     for col, default in SIM_COLS_DEFAULTS.items():
         if col not in df_base.columns:
             df_base[col] = default
@@ -293,7 +358,7 @@ def load_base_data() -> Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], 
     if not lista_fornecedores:
         lista_fornecedores = ["SEM DADOS"]
 
-    lista_categorias_global = sorted(df_base["Area"].unique().tolist())
+    lista_categorias_global = sorted(df_base["Area"].astype(str).unique().tolist())
 
     logger.info("Base carregada do Postgres: %d linhas", len(df_base))
     return df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global
