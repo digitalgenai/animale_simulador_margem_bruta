@@ -305,7 +305,6 @@ def load_base_data() -> Tuple[
         mes_ref_label = LISTA_MESES_ANO[-1]
 
     # ==== Deriva colunas do mês ref (último label) ====
-    mes_ref_label = LISTA_MESES_ANO[-1]
     fat_ref = f"Fat_{mes_ref_label}"
     marg_ref = f"Marg_Val_{mes_ref_label}"
     qtd_ref = f"Qtd_{mes_ref_label}"
