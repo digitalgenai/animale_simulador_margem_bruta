@@ -510,26 +510,60 @@ def load_base_data() -> Tuple[
     df_base["ABC"] = df_base["Curva_ABC"]
     df_base["Categ"] = df_base["Area"]
 
-    # Mês-ref: último legacy com venda (fat ou qtd)
-    mes_ref_label = None
-    for m in reversed(labels_legacy):
-        fat_m = f"Fat_{m}"
-        qtd_m = f"Qtd_{m}"
-        if fat_m in df_base.columns and float(df_base[fat_m].sum()) > 0:
-            mes_ref_label = m
+    # =========================================
+    # Mês-ref: escolha pelo SAFE (YYYY_MM)
+    # =========================================
+    mes_ref_safe = None
+    for s in reversed(labels_safe):
+        fat_s = f"Fat_{s}"
+        qtd_s = f"Qtd_{s}"
+        if fat_s in df_base.columns and float(df_base[fat_s].sum()) > 0:
+            mes_ref_safe = s
             break
-        if qtd_m in df_base.columns and float(df_base[qtd_m].sum()) > 0:
-            mes_ref_label = m
+        if qtd_s in df_base.columns and float(df_base[qtd_s].sum()) > 0:
+            mes_ref_safe = s
             break
-    if mes_ref_label is None:
-        mes_ref_label = labels_legacy[-1]
 
-    fat_ref = f"Fat_{mes_ref_label}"
-    marg_ref = f"Marg_Val_{mes_ref_label}"
-    qtd_ref = f"Qtd_{mes_ref_label}"
+    if mes_ref_safe is None:
+        mes_ref_safe = labels_safe[-1]
 
-    logger.info("mes_ref_label=%s | fat_ref=%s | qtd_ref=%s", mes_ref_label, fat_ref, qtd_ref)
-    _ensure_columns(df_base, [fat_ref, marg_ref, qtd_ref], 0.0)
+    fat_ref = f"Fat_{mes_ref_safe}"
+    marg_ref = f"Marg_Val_{mes_ref_safe}"
+    qtd_ref = f"Qtd_{mes_ref_safe}"
+
+    # label “humano” só pra log/UI
+    mes_ref_label = safe_to_legacy.get(mes_ref_safe, mes_ref_safe)
+    logger.info("mes_ref_safe=%s | mes_ref_label=%s", mes_ref_safe, mes_ref_label)
+
+    # =========================================
+    # GUARDA: se faltar alguma coluna, NÃO mascara com 0
+    # =========================================
+    missing = [c for c in (fat_ref, marg_ref, qtd_ref) if c not in df_base.columns]
+    if missing:
+        raise RuntimeError(f"Colunas do mês-ref ausentes: {missing}. mes_ref_safe={mes_ref_safe}")
+
+    logger.info(
+        "sum(%s)=%.2f | sum(%s)=%.2f | sum(%s)=%.2f",
+        fat_ref, float(df_base[fat_ref].sum()),
+        marg_ref, float(df_base[marg_ref].sum()),
+        qtd_ref, float(df_base[qtd_ref].sum()),
+    )
+
+    # =========================================
+    # Derivadas do mês ref (SAFE)
+    # =========================================
+    df_base["Qtd_Nov"] = df_base[qtd_ref].fillna(0.0).round().astype(int)
+    df_base["Preco_Atual"] = _safe_div(df_base[fat_ref], df_base[qtd_ref])
+    df_base["Custo"] = _safe_div(df_base[fat_ref] - df_base[marg_ref], df_base[qtd_ref])
+    df_base["Marg_Unit"] = _safe_div(df_base[marg_ref], df_base[qtd_ref])
+    df_base["Marg_Perc"] = _safe_div(df_base[marg_ref], df_base[fat_ref])
+
+    # Aliases grid (mantém como você já faz)
+    df_base["Qtd Nov"] = df_base["Qtd_Nov"]
+    df_base["Preço Atual"] = df_base["Preco_Atual"]
+    df_base["Marg R$"] = df_base["Marg_Unit"]
+    df_base["Marg %"] = df_base["Marg_Perc"]
+    df_base["Marg Atual %"] = df_base["Marg_Perc"]
 
     logger.info(
         "sum(%s)=%.2f | sum(%s)=%.2f | raw_total=%.2f raw_qtd=%d",
@@ -540,20 +574,6 @@ def load_base_data() -> Tuple[
         float(df_raw["total_item"].sum()),
         int(df_raw["qtd_venda"].sum()),
     )
-
-    # Derivadas do mês ref
-    df_base["Qtd_Nov"] = df_base[qtd_ref].fillna(0.0).astype(int)
-    df_base["Preco_Atual"] = _safe_div(df_base[fat_ref], df_base[qtd_ref])
-    df_base["Custo"] = _safe_div(df_base[fat_ref] - df_base[marg_ref], df_base[qtd_ref])
-    df_base["Marg_Unit"] = _safe_div(df_base[marg_ref], df_base[qtd_ref])
-    df_base["Marg_Perc"] = _safe_div(df_base[marg_ref], df_base[fat_ref])
-
-    # Aliases “humanos” (grid)
-    df_base["Qtd Nov"] = df_base["Qtd_Nov"]
-    df_base["Preço Atual"] = df_base["Preco_Atual"]
-    df_base["Marg R$"] = df_base["Marg_Unit"]
-    df_base["Marg %"] = df_base["Marg_Perc"]
-    df_base["Marg Atual %"] = df_base["Marg_Perc"]
 
     # Benchmarks globais
     logger.info("Calculando Benchmarks Globais...")
