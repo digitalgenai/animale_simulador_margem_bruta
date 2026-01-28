@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 from sqlalchemy import text
+from sqlalchemy.engine import Engine
 
 from core.db import get_engine
 from core.config import (
@@ -22,6 +23,9 @@ from core.config import (
     col_conc_1,
     col_conc_2,
     COLUNA_AGREGACAO_PRINCIPAL,
+    PGSCHEMA_DEFAULT,
+    PGTABLE_DEFAULT,
+    N_MESES_JANELA,
 )
 
 logger = logging.getLogger(__name__)
@@ -224,7 +228,12 @@ def _reset_pivot_index_to_sku(df_pvt: pd.DataFrame) -> pd.DataFrame:
 # Main
 # ======================================================================================
 
-def load_base_data() -> Tuple[
+def load_base_data(
+    engine: Optional[Engine] = None,
+    schema: Optional[str] = None,
+    table: Optional[str] = None,
+    n_months: Optional[int] = None,
+) -> Tuple[
     pd.DataFrame,
     Dict[str, float],
     Dict[str, float],
@@ -232,15 +241,14 @@ def load_base_data() -> Tuple[
     List[str],
     List[str],
 ]:
-    load_dotenv()
+    schema = schema or PGSCHEMA_DEFAULT
+    table = table or PGTABLE_DEFAULT
+    n = int(n_months or N_MESES_JANELA)
 
-    schema = os.getenv("PGSCHEMA", "stage")
-    table = os.getenv("PGTABLE", "obt_faturamento")
     full = f"{schema}.{table}"
-
     logger.info("Carregando base do Postgres: %s", full)
 
-    engine = get_engine()
+    engine = engine or get_engine()
 
     sql = text(
         f"""
@@ -269,7 +277,7 @@ def load_base_data() -> Tuple[
     df_raw["data_venda"] = pd.to_datetime(df_raw["data_venda"], errors="coerce")
     df_raw = df_raw.dropna(subset=["data_venda"]).copy()
 
-    df_raw["qtd_venda"] = pd.to_numeric(df_raw["qtd_venda"], errors="coerce").fillna(0).astype(int)
+    df_raw["qtd_venda"] = pd.to_numeric(df_raw["qtd_venda"], errors="coerce").fillna(0.0)
     df_raw["total_item"] = pd.to_numeric(df_raw["total_item"], errors="coerce").fillna(0.0)
     df_raw["lucro_total"] = pd.to_numeric(df_raw["lucro_total"], errors="coerce").fillna(0.0)
 
@@ -283,15 +291,6 @@ def load_base_data() -> Tuple[
 
     # Mês de referência: mês mais recente do dataset (primeiro dia do mês)
     ref_month_start = pd.Timestamp(max_dt.year, max_dt.month, 1).normalize()
-
-    # Tamanho da janela: usa tamanho do config se existir, senão 12
-    n = (
-        len(LISTA_MESES_ANO)
-        if isinstance(LISTA_MESES_ANO, (list, tuple)) and len(LISTA_MESES_ANO) > 0
-        else 12
-    )
-    if n <= 0:
-        raise RuntimeError("LISTA_MESES_ANO está vazio e n não pôde ser inferido.")
 
     start_month = (ref_month_start - pd.DateOffset(months=n - 1)).normalize()
 
@@ -564,6 +563,39 @@ def load_base_data() -> Tuple[
     df_base["Marg R$"] = df_base["Marg_Unit"]
     df_base["Marg %"] = df_base["Marg_Perc"]
     df_base["Marg Atual %"] = df_base["Marg_Perc"]
+
+    # =========================================================
+    # CONTRATO com o front (view_builders)
+    # =========================================================
+    df_base["Preco_Mais_Recente"] = df_base["Preco_Atual"]
+    df_base["Custo_Mais_Recente"] = df_base["Custo"]
+
+    # No desktop/web atual, "Qtd Nov" exibida costuma vir de Qtd_Media_Mensal
+    df_base["Qtd_Media_Mensal"] = df_base["Qtd_Nov"]
+
+    # Tab3 do view_builders usa Fat_Nov / Marg_Val_Nov (vamos apontar pro mês-ref real)
+    df_base["Fat_Nov"] = df_base[fat_ref]
+    df_base["Marg_Val_Nov"] = df_base[marg_ref]
+
+    # =========================================================
+    # HISTÓRICOS (6M / 3M / Pico) - usando LEGACY (compat)
+    # =========================================================
+    qtd_cols_ano = [f"Qtd_{m}" for m in labels_legacy]
+    qtd_cols_6m = [f"Qtd_{m}" for m in labels_legacy[-6:]]
+    qtd_cols_3m = [f"Qtd_{m}" for m in labels_legacy[-3:]]
+
+    _ensure_columns(df_base, qtd_cols_ano, 0.0)
+    _ensure_columns(df_base, qtd_cols_6m, 0.0)
+    _ensure_columns(df_base, qtd_cols_3m, 0.0)
+
+    df_base["Hist_Qtd_Media_6M"] = df_base[qtd_cols_6m].mean(axis=1)
+    df_base["Hist_Qtd_Media_3M"] = df_base[qtd_cols_3m].mean(axis=1)
+
+    # Pico do ano-móvel
+    df_base["Hist_Qtd_Pico"] = df_base[qtd_cols_ano].max(axis=1)
+    pico_col = df_base[qtd_cols_ano].idxmax(axis=1).astype(str)
+    df_base["Hist_Mes_Pico"] = pico_col.str.replace("Qtd_", "", regex=False)
+
 
     logger.info(
         "sum(%s)=%.2f | sum(%s)=%.2f | raw_total=%.2f raw_qtd=%d",

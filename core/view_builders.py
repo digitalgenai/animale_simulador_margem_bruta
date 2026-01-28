@@ -20,6 +20,7 @@ from core.calculations import (
     calcular_margem_real_valor,
 )
 
+from core.data_loader import get_month_context
 
 def _get_sim_state(sim_store: Dict[str, Any], produto_key: str) -> Tuple[bool, float, float, bool, float]:
     """
@@ -61,11 +62,19 @@ def compute_summary(df_view_atual: pd.DataFrame, bench_ano: Dict[str, float]) ->
         else 0.0
     )
 
-    cols_fat_5m = ["Fat_Jun", "Fat_Jul", "Fat_Ago", "Fat_Set", "Fat_Out"]
-    cols_marg_val_5m = ["Marg_Val_Jun", "Marg_Val_Jul", "Marg_Val_Ago", "Marg_Val_Set", "Marg_Val_Out"]
-    fat_5m = float(df_view_atual[cols_fat_5m].sum().sum()) if all(c in df_view_atual.columns for c in cols_fat_5m) else 0.0
-    marg_5m = float(df_view_atual[cols_marg_val_5m].sum().sum()) if all(c in df_view_atual.columns for c in cols_marg_val_5m) else 0.0
-    margem_5m = (marg_5m / fat_5m) if fat_5m > 0 else 0.0
+    ctx = get_month_context()
+    labels_legacy = ctx.get("labels_legacy") or []
+    labels_5m = labels_legacy[-5:] if len(labels_legacy) >= 5 else []
+
+    cols_fat_5m = [f"Fat_{m}" for m in labels_5m]
+    cols_marg_val_5m = [f"Marg_Val_{m}" for m in labels_5m]
+
+    if labels_5m and all(c in df_view_atual.columns for c in cols_fat_5m + cols_marg_val_5m):
+        fat_5m = float(df_view_atual[cols_fat_5m].sum().sum())
+        marg_5m = float(df_view_atual[cols_marg_val_5m].sum().sum())
+        margem_5m = (marg_5m / fat_5m) if fat_5m > 0 else 0.0
+    else:
+        margem_5m = 0.0
 
     counts_abc = df_view_atual["Curva_ABC"].value_counts()
     sku_a = int(counts_abc.get("A", 0))

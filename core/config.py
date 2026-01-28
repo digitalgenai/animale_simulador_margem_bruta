@@ -3,25 +3,27 @@ from __future__ import annotations
 import os
 import sys
 
-# --- 1. Configuração de Caminho ---
-# --- (Ver se está rodando no terminal ou no .exe) ---
+# --- Caminho base (mantido) ---
 def get_current_dir() -> str:
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
 
-# Arquivo base
 NOME_PLANILHA = "base_simulador.xlsx"
-
-# Permite override via variável de ambiente
-# Ex: BASE_SIMULADOR_PATH=/data/base_simulador.xlsx
 BASE_SIMULADOR_PATH = os.getenv(
     "BASE_SIMULADOR_PATH",
     os.path.join(os.path.dirname(get_current_dir()), NOME_PLANILHA),
 )
 
-# Constantes do negócio
+# --- Postgres (NOVO: padrão via env, usado pelo data_loader) ---
+PGSCHEMA_DEFAULT = os.getenv("PGSCHEMA", "stage")
+PGTABLE_DEFAULT = os.getenv("PGTABLE", "obt_faturamento")
+
+# Janela móvel em meses (evita depender do len(LISTA_MESES_ANO))
+N_MESES_JANELA = int(os.getenv("N_MESES_JANELA", "12"))
+
+# --- Constantes do negócio ---
 TAXA_DEDUCAO_FATURAMENTO = 0.2203
 
 col_conc_1 = "Preço PETZ"
@@ -33,17 +35,17 @@ COLUNA_AGREGACAO_PRINCIPAL = "Fornecedor"
 ALERTA_PRECO_BAIXO = " 🔻"
 ALERTA_PRECO_ALTO = " 🔺"
 
-# Meses (mantendo exatamente a lista original: Jan..Nov)
-LISTA_MESES_ANO = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov"]
+# --- Meses (corrigido: 12 meses, incluindo Dez) ---
+LISTA_MESES_ANO = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 
-# Conjuntos usados nos benchmarks
-MESES_6M = ["Jun", "Jul", "Ago", "Set", "Out", "Nov"]
-MESES_3M = ["Set", "Out", "Nov"]
+# Mantidos por compat (ideal: usar month_context do data_loader)
+MESES_6M = ["Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+MESES_3M = ["Out", "Nov", "Dez"]
 
-# Colunas textuais que o original tratava
+# --- Colunas textuais ---
 TEXT_COLS = ["Fornecedor", "Fabricante", "Area", "Produto", "SKU", "Curva_ABC", "Cod_Barras", "Hist_Mes_Pico"]
 
-# Colunas numéricas base
+# --- Colunas numéricas base (contrato com view_builders) ---
 BASE_NUM_COLS = [
     "Preco_Mais_Recente",
     "Custo_Mais_Recente",
@@ -53,14 +55,12 @@ BASE_NUM_COLS = [
     "Qtd_Media_Mensal",
     "Fat_Total_Trimestre",
     "Valor_Margem_Total_Trimestre",
-    # as colunas do Nov são usadas em Tab3 (Fat_Nov / Marg_Val_Nov) e existem na lista mensal abaixo,
-    # mas mantemos aqui o comportamento original: numéricas ausentes viram 0.
+    "Margem_Media_Trimestre",
+    # Fat_Nov / Marg_Val_Nov serão garantidas no loader (alias do mês-ref)
 ]
 
-# Colunas auxiliares (o original garantia existência)
 AUX_NUM_COLS = ["Area_Margem_Media"]
 
-# Colunas de simulação (equivalentes às adicionadas no df_base do desktop)
 SIM_COLS_DEFAULTS = {
     "Sim_Manual_Ativa": False,
     "Sim_Preco_Manual": 0.0,
@@ -69,5 +69,4 @@ SIM_COLS_DEFAULTS = {
     "Sim_Conc_Delta": 0.0,
 }
 
-# Layout / limites
 MAX_ROWS_T1_T2 = 500
