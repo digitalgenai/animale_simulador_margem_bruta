@@ -107,10 +107,13 @@ def _safe_float_percent(val: Any, default: float) -> float:
 
 
 def _filter_tab12(df_base: pd.DataFrame, forn: str, fab: str, cat: str) -> pd.DataFrame:
-    if df_base is None or df_base.empty or not forn:
+    if df_base is None or df_base.empty:
         return df_base.iloc[0:0].copy() if isinstance(df_base, pd.DataFrame) else pd.DataFrame()
 
-    df_temp = df_base[df_base[COLUNA_AGREGACAO_PRINCIPAL] == forn]
+    if not forn or forn == "[TODOS]":
+        df_temp = df_base.copy()
+    else:
+        df_temp = df_base[df_base[COLUNA_AGREGACAO_PRINCIPAL] == forn]
 
     if fab and fab != "[TODOS]":
         df_temp = df_temp[df_temp["Fabricante"] == fab]
@@ -137,7 +140,7 @@ def _filter_tab3(df_base: pd.DataFrame, cat_t3: str, forn_t3: str) -> pd.DataFra
 
 
 def _get_fab_cat_options_for_supplier(df_base: pd.DataFrame, forn: str) -> Tuple[List[str], List[str]]:
-    if df_base is None or df_base.empty or not forn:
+    if df_base is None or df_base.empty or not forn or forn == "[TODOS]":
         return ["[TODOS]"], ["[TODAS]"]
     df_forn = df_base[df_base[COLUNA_AGREGACAO_PRINCIPAL] == forn]
     lista_fab = sorted(df_forn["Fabricante"].unique().tolist())
@@ -342,6 +345,9 @@ def make_grid(grid_id: str, column_defs: List[Dict[str, Any]]) -> dag.AgGrid:
         dashGridOptions={
             "rowSelection": "single",
             "animateRows": True,
+            "pagination": True,
+            "paginationPageSize": 50,
+            "paginationPageSizeSelector": [25, 50, 100, 200],
             **_apply_row_class_rules(),
         },
         className="ag-theme-alpine",
@@ -416,11 +422,11 @@ app.layout = dbc.Container(
                                     html.Span(f"  |  {COLUNA_AGREGACAO_PRINCIPAL}: ", style={"fontWeight": "700", "marginLeft": "10px"}),
                                     dcc.Dropdown(
                                         id="forn",
-                                        options=[{"label": x, "value": x} for x in lista_fornecedores0],
-                                        value=(lista_fornecedores0[0] if lista_fornecedores0 else None),
+                                        options=[{"label": "[TODOS]", "value": "[TODOS]"}] + [{"label": x, "value": x} for x in lista_fornecedores0],
+                                        value="[TODOS]",
                                         placeholder="Selecione...",
                                         style={"width": "260px", "display": "inline-block", "verticalAlign": "middle"},
-                                        clearable=True,
+                                        clearable=False,
                                     ),
                                     html.Span("  Fabr: ", style={"fontWeight": "700", "marginLeft": "10px"}),
                                     dcc.Dropdown(
@@ -651,8 +657,11 @@ app.layout = dbc.Container(
 )
 def on_mes_ref_change(mes_ref):
     df_base, _, _, _, lista_fornecedores, lista_categorias, _ = _get_data_for_mes_ref(mes_ref)
-    forn_opts = [{"label": x, "value": x} for x in (lista_fornecedores or ["SEM DADOS"])]
-    forn_val = (lista_fornecedores[0] if lista_fornecedores else None)
+
+    forn_list = (lista_fornecedores or ["SEM DADOS"])
+    forn_opts = [{"label": "[TODOS]", "value": "[TODOS]"}] + [{"label": x, "value": x} for x in forn_list]
+    forn_val = "[TODOS]"
+
     cat_opts = [{"label": x, "value": x} for x in (lista_categorias or [])]
     return forn_opts, forn_val, cat_opts, None
 
