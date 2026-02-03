@@ -35,6 +35,7 @@ logger = logging.getLogger("simulador_web")
 _DATA_LOCK = threading.Lock()
 _DATA_CACHE: Dict[str, Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], Dict[str, float], List[str], List[str], Dict[str, Any]]] = {}
 
+
 def _parse_ym_safe(s: str | None) -> Tuple[int | None, int | None]:
     if not s:
         return None, None
@@ -87,9 +88,10 @@ MES_REF_OPTIONS = (
     if _available_safe and _available_human and len(_available_safe) == len(_available_human)
     else []
 )
+
 DEFAULT_MES_REF_SAFE = month_ctx0.get("ref_month_safe") if month_ctx0 else None
 if _available_safe:
-    DEFAULT_MES_REF_SAFE = _available_safe[-2] if len(_available_safe) >= 2 else _available_safe[-1]
+    DEFAULT_MES_REF_SAFE = _available_safe[-1]
 
 
 # ---------- Helpers ----------
@@ -258,20 +260,22 @@ def _row_from_event(cell_event: dict, rowData: list[dict] | None):
 
     return None
 
+
 _PT_ABBR = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 
+
 def _closed_month_label(month_ctx: Dict[str, Any] | None) -> str:
-    ctx = month_ctx or {}
-    ts = ctx.get("closed_month")
+    ctx2 = month_ctx or {}
+    ts = ctx2.get("closed_month")
     if isinstance(ts, pd.Timestamp):
         return f"{_PT_ABBR[ts.month - 1]}/{ts.year}"
 
-    safe = ctx.get("closed_month_safe")  # "YYYY_MM"
+    safe = ctx2.get("closed_month_safe")  # "YYYY_MM"
     y, m = _parse_ym_safe(str(safe)) if safe else (None, None)
     if y and m:
         return f"{_PT_ABBR[m - 1]}/{y}"
 
-    return "Mês Fechado"
+    return "Mês"
 
 
 # ---------- Dash app ----------
@@ -345,9 +349,6 @@ def make_grid(grid_id: str, column_defs: List[Dict[str, Any]]) -> dag.AgGrid:
         dashGridOptions={
             "rowSelection": "single",
             "animateRows": True,
-            "pagination": True,
-            "paginationPageSize": 50,
-            "paginationPageSizeSelector": [25, 50, 100, 200],
             **_apply_row_class_rules(),
         },
         className="ag-theme-alpine",
@@ -674,6 +675,7 @@ def _set_header(coldefs, field, header):
             c2["headerName"] = header
         out.append(c2)
     return out
+
 
 @app.callback(
     Output("grid-t1", "columnDefs"),
