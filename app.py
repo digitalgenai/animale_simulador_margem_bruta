@@ -45,33 +45,27 @@ def _parse_ym_safe(s: str | None) -> Tuple[int | None, int | None]:
 
 
 def _get_data_for_mes_ref(mes_ref_safe: str | None):
-    """
-    Retorna:
-      df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global, month_ctx
-    """
     key = str(mes_ref_safe) if mes_ref_safe else "__DEFAULT__"
 
     with _DATA_LOCK:
         if key in _DATA_CACHE:
             return _DATA_CACHE[key]
 
-    # carrega fora do lock curto (mas protegendo gravação)
-    if key == "__DEFAULT__":
-        df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data()
-        month_ctx = get_month_context()
-    else:
-        y, m = _parse_ym_safe(mes_ref_safe)
-        if y is None or m is None:
+        # carrega ainda sob lock (evita corrida em callbacks paralelos)
+        if key == "__DEFAULT__":
             df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data()
             month_ctx = get_month_context()
         else:
-            df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data(ref_year=y, ref_month=m)
-            month_ctx = get_month_context()
+            y, m = _parse_ym_safe(mes_ref_safe)
+            if y is None or m is None:
+                df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data()
+                month_ctx = get_month_context()
+            else:
+                df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data(ref_year=y, ref_month=m)
+                month_ctx = get_month_context()
 
-    with _DATA_LOCK:
         _DATA_CACHE[key] = (df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global, month_ctx)
-
-    return _DATA_CACHE[key]
+        return _DATA_CACHE[key]
 
 
 # --- Carga default (para montar layout inicial) ---
@@ -94,8 +88,8 @@ MES_REF_OPTIONS = (
     else []
 )
 DEFAULT_MES_REF_SAFE = month_ctx0.get("ref_month_safe") if month_ctx0 else None
-if not DEFAULT_MES_REF_SAFE and _available_safe:
-    DEFAULT_MES_REF_SAFE = _available_safe[-1]
+if _available_safe:
+    DEFAULT_MES_REF_SAFE = _available_safe[-2] if len(_available_safe) >= 2 else _available_safe[-1]
 
 
 # ---------- Helpers ----------
@@ -1171,4 +1165,4 @@ def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_st
 
 
 if __name__ == "__main__":
-    app.run(debug=False, host="0.0.0.0", port=8050)
+    app.run(debug=True, host="0.0.0.0", port=8050)
