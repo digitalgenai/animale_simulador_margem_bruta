@@ -489,18 +489,32 @@ app.layout = dbc.Container(
                     label="1. Visão de Custo",
                     tab_id="tab-1",
                     children=[
-                        make_summary_block("t1"),
-                        html.Div("Objetivo: Definir Preço/Margem para calcular Custo Alvo.", className="small-muted"),
-                        make_grid("grid-t1", coldefs_t1),
+                        dcc.Loading(
+                            type="circle",
+                            children=html.Div(
+                                [
+                                    make_summary_block("t1"),
+                                    html.Div("Objetivo: Definir Preço/Margem para calcular Custo Alvo.", className="small-muted"),
+                                    make_grid("grid-t1", coldefs_t1),
+                                ]
+                            ),
+                        )
                     ],
                 ),
                 dbc.Tab(
                     label="2. Visão de Precificação",
                     tab_id="tab-2",
                     children=[
-                        make_summary_block("t2"),
-                        html.Div("Objetivo: Definir Delta % vs Concorrente para ver a Margem Resultante.", className="small-muted"),
-                        make_grid("grid-t2", coldefs_t2),
+                        dcc.Loading(
+                            type="circle",
+                            children=html.Div(
+                                [
+                                    make_summary_block("t2"),
+                                    html.Div("Objetivo: Definir Delta % vs Concorrente para ver a Margem Resultante.", className="small-muted"),
+                                    make_grid("grid-t2", coldefs_t2),
+                                ]
+                            ),
+                        )
                     ],
                 ),
                 dbc.Tab(
@@ -538,8 +552,15 @@ app.layout = dbc.Container(
                             className="mb-2",
                             style={"backgroundColor": "#e1e1e1"},
                         ),
-                        make_summary_block("t3"),
-                        make_grid("grid-t3", coldefs_t3),
+                        dcc.Loading(
+                            type="circle",
+                            children=html.Div(
+                                [
+                                    make_summary_block("t3"),
+                                    make_grid("grid-t3", coldefs_t3),
+                                ]
+                            ),
+                        ),
                     ],
                 ),
             ],
