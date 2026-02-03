@@ -1,8 +1,44 @@
 from __future__ import annotations
 
+import unicodedata
+from typing import Optional
+
 import numpy as np
 
-from core.config import TAXA_DEDUCAO_FATURAMENTO, col_conc_1, col_conc_2
+from core.config import TAXA_DEDUCAO_FATURAMENTO, TAXA_ESTETICA_SAUDE, col_conc_1, col_conc_2
+
+
+def _norm_txt(s: str) -> str:
+    """
+    Normaliza texto pra comparação (lower + remove acentos + trim).
+    """
+    if s is None:
+        return ""
+    s2 = str(s).strip().lower()
+    s2 = unicodedata.normalize("NFKD", s2)
+    s2 = "".join(ch for ch in s2 if not unicodedata.combining(ch))
+    return s2
+
+
+def is_estetica_saude(area: Optional[str]) -> bool:
+    """
+    Regra: aplica taxa extra (2.08%) para itens cuja Area remeta a Estética e/ou Saúde.
+
+    Implementação robusta:
+    - aceita variações com/sem acento
+    - aceita compostos (ex: "Estética e Saúde", "Saude", "Estetica", etc.)
+    """
+    a = _norm_txt(area or "")
+    if not a:
+        return False
+    return ("estetic" in a) or ("saude" in a) or ("saud" in a)
+
+
+def _taxa_deducao(area: Optional[str] = None, taxa_extra: float = 0.0) -> float:
+    extra = float(taxa_extra or 0.0)
+    if area is not None and is_estetica_saude(area):
+        extra += TAXA_ESTETICA_SAUDE
+    return TAXA_DEDUCAO_FATURAMENTO + extra
 
 
 def get_menor_concorrente(row: dict) -> float:
@@ -28,28 +64,43 @@ def dif_concorrente_custom(preco_atual: float, conc_referencia: float) -> float:
         return 0.0
 
 
-def calcular_custo_necessario(preco_alvo: float, margem_alvo: float) -> float:
+def calcular_custo_necessario(preco_alvo: float, margem_alvo: float, area: Optional[str] = None) -> float:
+    """
+    Custo necessário para atingir margem alvo (percentual) dado um preço.
+    Considera:
+      - TAXA_DEDUCAO_FATURAMENTO (padrão)
+      - + TAXA_ESTETICA_SAUDE quando Area for Estética/Saúde
+    """
     if preco_alvo <= 0:
         return 0.0
     try:
-        return (preco_alvo * (1 - TAXA_DEDUCAO_FATURAMENTO)) - (preco_alvo * margem_alvo)
+        td = _taxa_deducao(area)
+        return (preco_alvo * (1 - td)) - (preco_alvo * margem_alvo)
     except Exception:
         return 0.0
 
 
-def calcular_margem_real_percentual(custo: float, preco: float) -> float:
+def calcular_margem_real_percentual(custo: float, preco: float, area: Optional[str] = None) -> float:
+    """
+    Margem real percentual (sobre o preço) considerando deduções.
+    """
     if preco <= 0:
         return 0.0
     try:
-        return ((preco * (1 - TAXA_DEDUCAO_FATURAMENTO)) - custo) / preco
+        td = _taxa_deducao(area)
+        return ((preco * (1 - td)) - custo) / preco
     except Exception:
         return 0.0
 
 
-def calcular_margem_real_valor(custo: float, preco: float) -> float:
+def calcular_margem_real_valor(custo: float, preco: float, area: Optional[str] = None) -> float:
+    """
+    Margem real em R$ considerando deduções.
+    """
     if preco <= 0:
         return 0.0
     try:
-        return (preco * (1 - TAXA_DEDUCAO_FATURAMENTO)) - custo
+        td = _taxa_deducao(area)
+        return (preco * (1 - td)) - custo
     except Exception:
         return 0.0

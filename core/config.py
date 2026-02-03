@@ -25,6 +25,7 @@ N_MESES_JANELA = int(os.getenv("N_MESES_JANELA", "12"))
 
 # --- Constantes do negócio ---
 TAXA_DEDUCAO_FATURAMENTO = 0.2203
+TAXA_ESTETICA_SAUDE = 0.0208
 
 col_conc_1 = "Preço PETZ"
 col_conc_2 = "Preço PROCAMPO"

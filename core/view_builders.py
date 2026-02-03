@@ -22,6 +22,7 @@ from core.calculations import (
 
 from core.data_loader import get_month_context
 
+
 def _get_sim_state(sim_store: Dict[str, Any], produto_key: str) -> Tuple[bool, float, float, bool, float]:
     """
     Retorna:
@@ -41,7 +42,7 @@ def _get_sim_state(sim_store: Dict[str, Any], produto_key: str) -> Tuple[bool, f
     return sim_manual_ativa, sim_preco_man, sim_marg_man, sim_conc_ativa, sim_conc_delta
 
 
-def compute_summary(df_view_atual: pd.DataFrame, bench_ano: Dict[str, float]) -> Dict[str, Any]:
+def compute_summary(df_view_atual: pd.DataFrame, bench_ano: Dict[str, float], month_ctx: Dict[str, Any] | None = None) -> Dict[str, Any]:
     if df_view_atual is None or df_view_atual.empty:
         return {
             "fat_total": 0.0,
@@ -52,7 +53,7 @@ def compute_summary(df_view_atual: pd.DataFrame, bench_ano: Dict[str, float]) ->
             "sku_c": 0,
             "breakdown": [],
             "hist_placeholder": True,
-            "margem_5m": 0.0,  # calculado no original (mesmo que não exibido)
+            "margem_5m": 0.0,
         }
 
     fat_total = float(df_view_atual["Fat_Total_Trimestre"].sum())
@@ -62,7 +63,7 @@ def compute_summary(df_view_atual: pd.DataFrame, bench_ano: Dict[str, float]) ->
         else 0.0
     )
 
-    ctx = get_month_context()
+    ctx = month_ctx or get_month_context()
     labels_legacy = ctx.get("labels_legacy") or []
     labels_5m = labels_legacy[-5:] if len(labels_legacy) >= 5 else []
 
@@ -126,6 +127,7 @@ def build_tab1_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
     for _, row in df_limit.iterrows():
         produto_key = row["Produto_Key"]
         produto_nome = row.get("Produto", produto_key)
+        area = str(row.get("Area", ""))
 
         p_atual = float(row.get("Preco_Mais_Recente", 0.0))
         c_atual = float(row.get("Custo_Mais_Recente", 0.0))
@@ -136,10 +138,9 @@ def build_tab1_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
         val_conc1 = float(row.get(col_conc_1, 0.0))
         val_conc2 = float(row.get(col_conc_2, 0.0))
 
-        marg_real = float(calcular_margem_real_percentual(c_atual, p_atual))
+        marg_real = float(calcular_margem_real_percentual(c_atual, p_atual, area=area))
         dif_conc = float(dif_concorrente_custom(p_atual, menor_conc))
 
-        # Cor equivalente ao desktop
         is_neg = marg_real < 0
         is_yellow = (menor_conc > 0 and p_atual < menor_conc and (menor_conc - p_atual) > 1)
 
@@ -147,11 +148,11 @@ def build_tab1_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
         if sim_manual_ativa:
             sim_p = float(sim_preco_man)
             sim_m = float(sim_marg_man)
-            sim_c = float(calcular_custo_necessario(sim_p, sim_m))
+            sim_c = float(calcular_custo_necessario(sim_p, sim_m, area=area))
         else:
             sim_p = float(menor_conc if menor_conc > 0 else p_atual)
             sim_m = float(meta_t1_atual)
-            sim_c = float(calcular_custo_necessario(sim_p, sim_m))
+            sim_c = float(calcular_custo_necessario(sim_p, sim_m, area=area))
 
         rows.append(
             {
@@ -165,7 +166,7 @@ def build_tab1_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
 
                 "Preço Atual": fmt_real(p_atual),
                 "Custo": fmt_real(c_atual),
-                "Marg R$": fmt_real(calcular_margem_real_valor(c_atual, p_atual)),
+                "Marg R$": fmt_real(calcular_margem_real_valor(c_atual, p_atual, area=area)),
                 "Marg %": fmt_perc(marg_real),
 
                 NOME_CONC_1: fmt_real(val_conc1),
@@ -176,7 +177,6 @@ def build_tab1_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
                 "Sim Marg": fmt_perc(sim_m),
                 "Sim Custo Nec": fmt_real(sim_c),
 
-                # campos “raw” pro modal (equivalente ao popup do desktop)
                 "_produto_key": produto_key,
                 "_produto_nome": str(produto_nome),
                 "_p_atual": p_atual,
@@ -186,8 +186,8 @@ def build_tab1_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
                 "_sim_manual_ativa": sim_manual_ativa,
                 "_sim_preco_man": sim_preco_man,
                 "_sim_marg_man": sim_marg_man,
+                "_area": area,
 
-                # flags de estilo
                 "__is_neg": is_neg,
                 "__is_yellow": (not is_neg) and is_yellow,
             }
@@ -206,6 +206,7 @@ def build_tab2_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
     for _, row in df_limit.iterrows():
         produto_key = row["Produto_Key"]
         produto_nome = row.get("Produto", produto_key)
+        area = str(row.get("Area", ""))
 
         p_atual = float(row.get("Preco_Mais_Recente", 0.0))
         c_atual = float(row.get("Custo_Mais_Recente", 0.0))
@@ -216,7 +217,7 @@ def build_tab2_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
         val_conc1 = float(row.get(col_conc_1, 0.0))
         val_conc2 = float(row.get(col_conc_2, 0.0))
 
-        marg_real = float(calcular_margem_real_percentual(c_atual, p_atual))
+        marg_real = float(calcular_margem_real_percentual(c_atual, p_atual, area=area))
         dif_atual = float(dif_concorrente_custom(p_atual, menor_conc))
 
         is_neg = marg_real < 0
@@ -229,7 +230,7 @@ def build_tab2_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
         else:
             sim_p_conc = float(p_atual)
 
-        sim_marg_result = float(calcular_margem_real_percentual(c_atual, sim_p_conc))
+        sim_marg_result = float(calcular_margem_real_percentual(c_atual, sim_p_conc, area=area))
 
         delta_str = fmt_perc(delta_target)
         if sim_conc_ativa:
@@ -265,6 +266,7 @@ def build_tab2_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
                 "_meta_t2": meta_t2_atual,
                 "_sim_conc_ativa": sim_conc_ativa,
                 "_sim_conc_delta": sim_conc_delta,
+                "_area": area,
 
                 "__is_neg": is_neg,
                 "__is_yellow": (not is_neg) and is_yellow,
@@ -279,7 +281,6 @@ def build_tab3_rows(df_view_atual: pd.DataFrame) -> List[Dict[str, Any]]:
     if df_view_atual is None or df_view_atual.empty:
         return rows
 
-    # Agrupa como no desktop: fornecedor -> soma Fat_Nov e Marg_Val_Nov
     if "Fat_Nov" not in df_view_atual.columns:
         df_view_atual = df_view_atual.assign(Fat_Nov=0.0)
     if "Marg_Val_Nov" not in df_view_atual.columns:

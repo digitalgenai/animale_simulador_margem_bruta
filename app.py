@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import io
 import logging
+import re
+import threading
 from typing import Any, Dict, List, Tuple
 
 import pandas as pd
-import numpy as np
 
 from dash import Dash, html, dcc, Input, Output, State, ctx, no_update
 import dash_bootstrap_components as dbc
@@ -13,15 +14,9 @@ import dash_ag_grid as dag
 
 from core.config import (
     BASE_SIMULADOR_PATH,
-    TAXA_DEDUCAO_FATURAMENTO,
-    col_conc_1,
-    col_conc_2,
-    NOME_CONC_1,
-    NOME_CONC_2,
     COLUNA_AGREGACAO_PRINCIPAL,
-    LISTA_MESES_ANO,
 )
-from core.data_loader import load_base_data
+from core.data_loader import load_base_data, get_month_context
 from core.view_builders import (
     compute_summary,
     build_tab1_rows,
@@ -29,20 +24,78 @@ from core.view_builders import (
     build_tab3_rows,
     build_history_payload,
 )
-from core.calculations import calcular_custo_necessario
+from core.calculations import calcular_custo_necessario, calcular_margem_real_percentual
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("simulador_web")
 
-# --- Carga global (equivalente ao bloco try do desktop) ---
+# =============================================================================
+# Cache de datasets por Mês/Ano (evita reload em toda interação)
+# =============================================================================
+_DATA_LOCK = threading.Lock()
+_DATA_CACHE: Dict[str, Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], Dict[str, float], List[str], List[str], Dict[str, Any]]] = {}
+
+def _parse_ym_safe(s: str | None) -> Tuple[int | None, int | None]:
+    if not s:
+        return None, None
+    m = re.match(r"^(\d{4})[_-](\d{2})$", str(s).strip())
+    if not m:
+        return None, None
+    return int(m.group(1)), int(m.group(2))
+
+
+def _get_data_for_mes_ref(mes_ref_safe: str | None):
+    """
+    Retorna:
+      df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global, month_ctx
+    """
+    key = str(mes_ref_safe) if mes_ref_safe else "__DEFAULT__"
+
+    with _DATA_LOCK:
+        if key in _DATA_CACHE:
+            return _DATA_CACHE[key]
+
+    # carrega fora do lock curto (mas protegendo gravação)
+    if key == "__DEFAULT__":
+        df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data()
+        month_ctx = get_month_context()
+    else:
+        y, m = _parse_ym_safe(mes_ref_safe)
+        if y is None or m is None:
+            df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data()
+            month_ctx = get_month_context()
+        else:
+            df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data(ref_year=y, ref_month=m)
+            month_ctx = get_month_context()
+
+    with _DATA_LOCK:
+        _DATA_CACHE[key] = (df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global, month_ctx)
+
+    return _DATA_CACHE[key]
+
+
+# --- Carga default (para montar layout inicial) ---
 try:
-    df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data()
+    df_base0, bench_ano0, bench_6m0, bench_3m0, lista_fornecedores0, lista_categorias0 = load_base_data()
+    month_ctx0 = get_month_context()
 except Exception as e:
-    # No desktop era sg.popup_error + sys.exit; aqui levantamos erro explícito no log e exibimos na tela.
     logger.exception("Erro inicialização ao carregar '%s': %s", BASE_SIMULADOR_PATH, e)
-    df_base = pd.DataFrame()
-    bench_ano, bench_6m, bench_3m = {}, {}, {}
-    lista_fornecedores, lista_categorias_global = ["SEM DADOS"], []
+    df_base0 = pd.DataFrame()
+    bench_ano0, bench_6m0, bench_3m0 = {}, {}, {}
+    lista_fornecedores0, lista_categorias0 = ["SEM DADOS"], []
+    month_ctx0 = {}
+
+# options do seletor Mês/Ano (range real do dataset)
+_available_safe = month_ctx0.get("available_labels_safe") or []
+_available_human = month_ctx0.get("available_labels_human") or []
+MES_REF_OPTIONS = (
+    [{"label": h, "value": s} for s, h in zip(_available_safe, _available_human)]
+    if _available_safe and _available_human and len(_available_safe) == len(_available_human)
+    else []
+)
+DEFAULT_MES_REF_SAFE = month_ctx0.get("ref_month_safe") if month_ctx0 else None
+if not DEFAULT_MES_REF_SAFE and _available_safe:
+    DEFAULT_MES_REF_SAFE = _available_safe[-1]
 
 
 # ---------- Helpers ----------
@@ -59,9 +112,9 @@ def _safe_float_percent(val: Any, default: float) -> float:
         return default
 
 
-def _filter_tab12(forn: str, fab: str, cat: str) -> pd.DataFrame:
-    if df_base.empty or not forn:
-        return df_base.iloc[0:0].copy()
+def _filter_tab12(df_base: pd.DataFrame, forn: str, fab: str, cat: str) -> pd.DataFrame:
+    if df_base is None or df_base.empty or not forn:
+        return df_base.iloc[0:0].copy() if isinstance(df_base, pd.DataFrame) else pd.DataFrame()
 
     df_temp = df_base[df_base[COLUNA_AGREGACAO_PRINCIPAL] == forn]
 
@@ -71,7 +124,6 @@ def _filter_tab12(forn: str, fab: str, cat: str) -> pd.DataFrame:
     if cat and cat != "[TODAS]":
         df_temp = df_temp[df_temp["Area"] == cat]
 
-    # Ordenação ABC como no desktop
     abc_map = {"A": 0, "B": 1, "C": 2}
     abc_order = df_temp["Curva_ABC"].map(abc_map).fillna(3)
     df_temp = df_temp.assign(ABC_Order=abc_order).sort_values(
@@ -80,9 +132,9 @@ def _filter_tab12(forn: str, fab: str, cat: str) -> pd.DataFrame:
     return df_temp
 
 
-def _filter_tab3(cat_t3: str, forn_t3: str) -> pd.DataFrame:
-    if df_base.empty or not cat_t3:
-        return df_base.iloc[0:0].copy()
+def _filter_tab3(df_base: pd.DataFrame, cat_t3: str, forn_t3: str) -> pd.DataFrame:
+    if df_base is None or df_base.empty or not cat_t3:
+        return df_base.iloc[0:0].copy() if isinstance(df_base, pd.DataFrame) else pd.DataFrame()
 
     df_temp = df_base[df_base["Area"] == cat_t3]
     if forn_t3 and forn_t3 != "[TODOS]":
@@ -90,8 +142,8 @@ def _filter_tab3(cat_t3: str, forn_t3: str) -> pd.DataFrame:
     return df_temp
 
 
-def _get_fab_cat_options_for_supplier(forn: str) -> Tuple[List[str], List[str]]:
-    if df_base.empty or not forn:
+def _get_fab_cat_options_for_supplier(df_base: pd.DataFrame, forn: str) -> Tuple[List[str], List[str]]:
+    if df_base is None or df_base.empty or not forn:
         return ["[TODOS]"], ["[TODAS]"]
     df_forn = df_base[df_base[COLUNA_AGREGACAO_PRINCIPAL] == forn]
     lista_fab = sorted(df_forn["Fabricante"].unique().tolist())
@@ -101,8 +153,8 @@ def _get_fab_cat_options_for_supplier(forn: str) -> Tuple[List[str], List[str]]:
     return lista_fab, lista_cat
 
 
-def _get_supplier_options_for_category(cat_t3: str) -> List[str]:
-    if df_base.empty or not cat_t3:
+def _get_supplier_options_for_category(df_base: pd.DataFrame, cat_t3: str) -> List[str]:
+    if df_base is None or df_base.empty or not cat_t3:
         return ["[TODOS]"]
     df_cat = df_base[df_base["Area"] == cat_t3]
     rank_forn_cat = df_cat.groupby("Fornecedor")["Fat_Total_Trimestre"].sum().sort_values(ascending=False)
@@ -112,22 +164,12 @@ def _get_supplier_options_for_category(cat_t3: str) -> List[str]:
 
 
 def _apply_row_class_rules() -> Dict[str, Any]:
-    # Usa flags __is_neg e __is_yellow (equivalente às cores no desktop)
     return {
         "rowClassRules": {
             "row-neg": "params.data.__is_neg === true",
             "row-yellow": "params.data.__is_yellow === true",
         }
     }
-
-
-def _kpi_line(prefix: str):
-    return html.Div(
-        [
-            html.Span(prefix, className="kpi-label"),
-        ],
-        style={"display": "inline-block", "marginRight": "10px"},
-    )
 
 
 def _format_kpi(label: str, value: str, color: str | None = None):
@@ -145,7 +187,6 @@ def _format_kpi(label: str, value: str, color: str | None = None):
 
 
 def _breakdown_component(breakdown: List[Dict[str, Any]]):
-    # replica o texto multiline do desktop, mas como tabela HTML
     header = html.Thead(
         html.Tr(
             [
@@ -169,12 +210,10 @@ def _breakdown_component(breakdown: List[Dict[str, Any]]):
             )
         )
     body = html.Tbody(body_rows)
-
     return dbc.Table([header, body], bordered=True, size="sm", className="breakdown-table")
 
 
 def _history_component(hist: Dict[str, Any], suffix: str):
-    # Mantém exatamente os campos do desktop
     return html.Div(
         [
             html.Div("Detalhes (Inteligência Temporal):", style={"fontWeight": "700", "color": "navy"}),
@@ -202,23 +241,23 @@ def _history_component(hist: Dict[str, Any], suffix: str):
         id=f"hist-box-{suffix}",
     )
 
+
 def _row_from_event(cell_event: dict, rowData: list[dict] | None):
     if not cell_event or not rowData:
         return None
 
     row_id = cell_event.get("rowId")
     if row_id is not None:
-        # seu getRowId = "params.data.id" -> evento devolve rowId = id
         for r in rowData:
             if str(r.get("id")) == str(row_id):
                 return r
 
-    # fallback pelo índice (geralmente funciona também)
     idx = cell_event.get("rowIndex")
     if isinstance(idx, int) and 0 <= idx < len(rowData):
         return rowData[idx]
 
     return None
+
 
 # ---------- Dash app ----------
 app = Dash(
@@ -229,10 +268,9 @@ app = Dash(
 )
 server = app.server
 
-# Stores de sessão (equivalente a manter df_base “mutável” por usuário no desktop)
 store_sim_default = {"manual": {}, "conc": {}}
 
-# ColumnDefs (equivalentes às colunas dos sg.Table)
+# ColumnDefs
 coldefs_t1 = [
     {"headerName": "SKU", "field": "SKU", "width": 95},
     {"headerName": "Produto", "field": "Produto", "width": 260},
@@ -243,8 +281,8 @@ coldefs_t1 = [
     {"headerName": "Custo", "field": "Custo", "width": 110},
     {"headerName": "Marg R$", "field": "Marg R$", "width": 110},
     {"headerName": "Marg %", "field": "Marg %", "width": 95},
-    {"headerName": NOME_CONC_1, "field": NOME_CONC_1, "width": 110},
-    {"headerName": NOME_CONC_2, "field": NOME_CONC_2, "width": 110},
+    {"headerName": "PETZ", "field": "PETZ", "width": 110},
+    {"headerName": "PROCAMPO", "field": "PROCAMPO", "width": 110},
     {"headerName": "Dif % (Menor)", "field": "Dif % (Menor)", "width": 110},
     {"headerName": "Sim Preço", "field": "Sim Preço", "width": 110},
     {"headerName": "Sim Marg", "field": "Sim Marg", "width": 95},
@@ -260,8 +298,8 @@ coldefs_t2 = [
     {"headerName": "Preço Atual", "field": "Preço Atual", "width": 110},
     {"headerName": "Custo", "field": "Custo", "width": 110},
     {"headerName": "Marg Atual %", "field": "Marg Atual %", "width": 115},
-    {"headerName": NOME_CONC_1, "field": NOME_CONC_1, "width": 110},
-    {"headerName": NOME_CONC_2, "field": NOME_CONC_2, "width": 110},
+    {"headerName": "PETZ", "field": "PETZ", "width": 110},
+    {"headerName": "PROCAMPO", "field": "PROCAMPO", "width": 110},
     {"headerName": "Dif Atual (Menor)", "field": "Dif Atual (Menor)", "width": 130},
     {"headerName": "DELTA ALVO %", "field": "DELTA ALVO %", "width": 120},
     {"headerName": "Sim Preço (Conc)", "field": "Sim Preço (Conc)", "width": 130},
@@ -346,7 +384,7 @@ app.layout = dbc.Container(
     fluid=True,
     children=[
         dcc.Store(id="store-sim", storage_type="session", data=store_sim_default),
-        dcc.Store(id="store-selected", storage_type="session", data={"produto_key": None}),
+        dcc.Store(id="store-selected", storage_type="session", data={"produto_key": None, "area": ""}),
         dcc.Download(id="download-excel"),
 
         dbc.Row(
@@ -356,11 +394,21 @@ app.layout = dbc.Container(
                         [
                             html.Div(
                                 [
-                                    html.Span(f"{COLUNA_AGREGACAO_PRINCIPAL}: ", style={"fontWeight": "700"}),
+                                    html.Span("Mês/Ano: ", style={"fontWeight": "700"}),
+                                    dcc.Dropdown(
+                                        id="mes_ref",
+                                        options=MES_REF_OPTIONS,
+                                        value=DEFAULT_MES_REF_SAFE,
+                                        placeholder="Selecione...",
+                                        style={"width": "160px", "display": "inline-block", "verticalAlign": "middle"},
+                                        clearable=False,
+                                    ),
+
+                                    html.Span(f"  |  {COLUNA_AGREGACAO_PRINCIPAL}: ", style={"fontWeight": "700", "marginLeft": "10px"}),
                                     dcc.Dropdown(
                                         id="forn",
-                                        options=[{"label": x, "value": x} for x in lista_fornecedores],
-                                        value=(lista_fornecedores[0] if lista_fornecedores else None),
+                                        options=[{"label": x, "value": x} for x in lista_fornecedores0],
+                                        value=(lista_fornecedores0[0] if lista_fornecedores0 else None),
                                         placeholder="Selecione...",
                                         style={"width": "260px", "display": "inline-block", "verticalAlign": "middle"},
                                         clearable=True,
@@ -451,7 +499,7 @@ app.layout = dbc.Container(
                                             html.Span("1. Selecione a Categoria (Principal): ", style={"fontWeight": "700", "color": "navy"}),
                                             dcc.Dropdown(
                                                 id="cat_t3",
-                                                options=[{"label": x, "value": x} for x in lista_categorias_global],
+                                                options=[{"label": x, "value": x} for x in lista_categorias0],
                                                 value=None,
                                                 placeholder="Selecione...",
                                                 style={"width": "260px", "display": "inline-block"},
@@ -542,7 +590,7 @@ app.layout = dbc.Container(
             is_open=False,
             size="lg",
             children=[
-                dbc.ModalHeader(dbc.ModalTitle(id="modal-mkt-title", children="Simulação Mercado")),
+                dbc.ModalHeader(dbc.ModalTitle(id="modal-mkt-title", children="Simulação Mercado")) ,
                 dbc.ModalBody(
                     [
                         html.Div(id="mkt-menor-conc", style={"color": "blue", "fontWeight": "700"}),
@@ -581,16 +629,36 @@ app.layout = dbc.Container(
     ],
 )
 
-# ---------- Callbacks de opções ----------
+
+# =============================================================================
+# Callbacks: atualizar listas ao mudar Mês/Ano
+# =============================================================================
+@app.callback(
+    Output("forn", "options"),
+    Output("forn", "value"),
+    Output("cat_t3", "options"),
+    Output("cat_t3", "value"),
+    Input("mes_ref", "value"),
+)
+def on_mes_ref_change(mes_ref):
+    df_base, _, _, _, lista_fornecedores, lista_categorias, _ = _get_data_for_mes_ref(mes_ref)
+    forn_opts = [{"label": x, "value": x} for x in (lista_fornecedores or ["SEM DADOS"])]
+    forn_val = (lista_fornecedores[0] if lista_fornecedores else None)
+    cat_opts = [{"label": x, "value": x} for x in (lista_categorias or [])]
+    return forn_opts, forn_val, cat_opts, None
+
+
 @app.callback(
     Output("fab", "options"),
     Output("fab", "value"),
     Output("cat", "options"),
     Output("cat", "value"),
+    Input("mes_ref", "value"),
     Input("forn", "value"),
 )
-def on_fornecedor_change(forn):
-    fab_opts, cat_opts = _get_fab_cat_options_for_supplier(forn)
+def on_fornecedor_change(mes_ref, forn):
+    df_base, _, _, _, _, _, _ = _get_data_for_mes_ref(mes_ref)
+    fab_opts, cat_opts = _get_fab_cat_options_for_supplier(df_base, forn)
     return (
         [{"label": x, "value": x} for x in fab_opts],
         "[TODOS]",
@@ -602,14 +670,18 @@ def on_fornecedor_change(forn):
 @app.callback(
     Output("forn_t3", "options"),
     Output("forn_t3", "value"),
+    Input("mes_ref", "value"),
     Input("cat_t3", "value"),
 )
-def on_cat_t3_change(cat_t3):
-    opts = _get_supplier_options_for_category(cat_t3)
+def on_cat_t3_change(mes_ref, cat_t3):
+    df_base, _, _, _, _, _, _ = _get_data_for_mes_ref(mes_ref)
+    opts = _get_supplier_options_for_category(df_base, cat_t3)
     return [{"label": x, "value": x} for x in opts], "[TODOS]"
 
 
-# ---------- Callback principal: atualizar tabelas + resumo ----------
+# =============================================================================
+# Callback principal: atualizar tabelas + resumo
+# =============================================================================
 @app.callback(
     Output("grid-t1", "rowData"),
     Output("grid-t2", "rowData"),
@@ -626,6 +698,7 @@ def on_cat_t3_change(cat_t3):
 
     Input("btn-refresh", "n_clicks"),
     Input("tabs", "active_tab"),
+    Input("mes_ref", "value"),
     Input("forn", "value"),
     Input("fab", "value"),
     Input("cat", "value"),
@@ -635,25 +708,22 @@ def on_cat_t3_change(cat_t3):
     Input("forn_t3", "value"),
     Input("store-sim", "data"),
 )
-def refresh_all(_, active_tab, forn, fab, cat, meta_t1, meta_t2, cat_t3, forn_t3, sim_store):
-    logger.info(
-        "refresh_all: tab=%s forn=%s fab=%s cat=%s cat_t3=%s forn_t3=%s",
-        active_tab, forn, fab, cat, cat_t3, forn_t3
-    )
+def refresh_all(_, active_tab, mes_ref, forn, fab, cat, meta_t1, meta_t2, cat_t3, forn_t3, sim_store):
+    df_base, bench_ano, _, _, _, _, month_ctx = _get_data_for_mes_ref(mes_ref)
 
     meta_t1_atual = _safe_float_percent(meta_t1, 0.30)
     meta_t2_atual = _safe_float_percent(meta_t2, 0.00)
 
-    df_view_12 = _filter_tab12(forn, fab, cat)
+    df_view_12 = _filter_tab12(df_base, forn, fab, cat)
     rows_t1 = build_tab1_rows(df_view_12, sim_store, meta_t1_atual)
-    sum_t1 = compute_summary(df_view_12, bench_ano)
+    sum_t1 = compute_summary(df_view_12, bench_ano, month_ctx=month_ctx)
 
     rows_t2 = build_tab2_rows(df_view_12, sim_store, meta_t2_atual)
-    sum_t2 = compute_summary(df_view_12, bench_ano)
+    sum_t2 = compute_summary(df_view_12, bench_ano, month_ctx=month_ctx)
 
-    df_view_3 = _filter_tab3(cat_t3, forn_t3)
+    df_view_3 = _filter_tab3(df_base, cat_t3, forn_t3)
     rows_t3 = build_tab3_rows(df_view_3)
-    sum_t3 = compute_summary(df_view_3, bench_ano)
+    sum_t3 = compute_summary(df_view_3, bench_ano, month_ctx=month_ctx)
 
     def kpi_children(summary):
         return [
@@ -689,8 +759,6 @@ def refresh_all(_, active_tab, forn, fab, cat, meta_t1, meta_t2, cat_t3, forn_t3
     Input("tabs", "active_tab"),
 )
 def fit_columns_on_visible_tab(active_tab):
-    # Só manda sizeToFit para o grid visível.
-    # Nos outros, no_update (evita width=0).
     if active_tab == "tab-1":
         return "sizeToFit", no_update, no_update
     if active_tab == "tab-2":
@@ -700,7 +768,9 @@ def fit_columns_on_visible_tab(active_tab):
     return no_update, no_update, no_update
 
 
-# ---------- Atualizar histórico ao clicar em célula (tabs 1 e 2) ----------
+# =============================================================================
+# Atualizar histórico ao clicar em célula (tabs 1 e 2)
+# =============================================================================
 @app.callback(
     Output("hist-box-t1", "children"),
     Output("hist-box-t2", "children"),
@@ -708,19 +778,21 @@ def fit_columns_on_visible_tab(active_tab):
     Input("grid-t2", "cellClicked"),
     State("grid-t1", "rowData"),
     State("grid-t2", "rowData"),
+    Input("mes_ref", "value"),
     Input("forn", "value"),
     Input("fab", "value"),
     Input("cat", "value"),
     Input("tabs", "active_tab"),
 )
-def on_cell_click(cell1, cell2, rowData1, rowData2, forn, fab, cat, active_tab):
+def on_cell_click(cell1, cell2, rowData1, rowData2, mes_ref, forn, fab, cat, active_tab):
     hist_default = {"produto": "Selecione...", "hist_6m": "-", "hist_3m": "-", "hist_nov": "-", "hist_pico": "-"}
 
     trig = ctx.triggered_id
-    if trig in ("forn", "fab", "cat", "tabs"):
+    if trig in ("mes_ref", "forn", "fab", "cat", "tabs"):
         return _history_component(hist_default, "t1").children, _history_component(hist_default, "t2").children
 
-    if df_base.empty:
+    df_base, _, _, _, _, _, _ = _get_data_for_mes_ref(mes_ref)
+    if df_base is None or df_base.empty:
         return _history_component(hist_default, "t1").children, _history_component(hist_default, "t2").children
 
     if trig == "grid-t1" and active_tab == "tab-1" and isinstance(cell1, dict):
@@ -740,8 +812,9 @@ def on_cell_click(cell1, cell2, rowData1, rowData2, forn, fab, cat, active_tab):
     return no_update, no_update
 
 
-# ---------- Duplo clique: abrir modais ----------
-# helper local (coloca perto do _safe_float_percent)
+# =============================================================================
+# Duplo clique: abrir modais
+# =============================================================================
 def _parse_float(val, default=0.0) -> float:
     try:
         if val is None:
@@ -815,6 +888,7 @@ def modal_controller(
     }
 
     produto_key = (selected_state or {}).get("produto_key")
+    area_sel = (selected_state or {}).get("area") or ""
 
     # ---------- FECHAR ----------
     if trig == "fin-close":
@@ -856,7 +930,7 @@ def modal_controller(
         else:
             p = _parse_float(fin_p2, 0.0)
             c = _parse_float(fin_c, 0.0)
-            m = 1 - TAXA_DEDUCAO_FATURAMENTO - (c / p) if p > 0 else 0.0
+            m = float(calcular_margem_real_percentual(c, p, area=area_sel))
             sim["manual"][produto_key] = {"ativa": True, "preco": p, "margem": m}
 
         return (
@@ -882,7 +956,6 @@ def modal_controller(
                 no_update, sim
             )
 
-        # mkt-save
         d = _parse_float(mkt_delta, 0.0) / 100.0
         sim["conc"][produto_key] = {"ativa": True, "delta": d}
 
@@ -902,12 +975,13 @@ def modal_controller(
             return (
                 fin_open, no_update, no_update, no_update, no_update, no_update,
                 mkt_open, no_update, no_update, no_update,
-                {"produto_key": None}, no_update
+                {"produto_key": None, "area": ""}, no_update
             )
 
         produto_key = row_grid.get("_produto_key") or row_grid.get("id")
         menor_conc = float(row_grid.get("_menor_conc", 0.0))
         p_atual = float(row_grid.get("_p_atual", 0.0))
+        area = str(row_grid.get("_area") or row_grid.get("Categ") or "")
 
         sim_manual_ativa = bool(row_grid.get("_sim_manual_ativa", False))
         sim_preco_man = float(row_grid.get("_sim_preco_man", 0.0))
@@ -920,13 +994,13 @@ def modal_controller(
             val_p = (menor_conc if menor_conc > 0 else p_atual)
             val_m = meta_t1_atual * 100.0
 
-        custo_calc = float(calcular_custo_necessario(val_p, val_m / 100.0))
+        custo_calc = float(calcular_custo_necessario(val_p, val_m / 100.0, area=area))
         fin_title = f"Financeiro: {str(row_grid.get('_produto_nome',''))[:30]}"
 
         return (
             True, fin_title, f"{val_p:.2f}", f"{val_m:.1f}", f"{val_p:.2f}", f"{custo_calc:.2f}",
             False, "Simulação Mercado", "", "",
-            {"produto_key": produto_key}, no_update
+            {"produto_key": produto_key, "area": area}, no_update
         )
 
     if trig == "grid-t2" and active_tab == "tab-2" and isinstance(cell2, dict):
@@ -940,6 +1014,7 @@ def modal_controller(
 
         produto_key = row_grid.get("_produto_key") or row_grid.get("id")
         menor_conc = float(row_grid.get("_menor_conc", 0.0))
+        area = str(row_grid.get("_area") or row_grid.get("Categ") or "")
 
         sim_conc_ativa = bool(row_grid.get("_sim_conc_ativa", False))
         sim_conc_delta = float(row_grid.get("_sim_conc_delta", 0.0))
@@ -953,8 +1028,14 @@ def modal_controller(
         return (
             False, "Simulação Fin.", "", "", "", "",
             True, mkt_title, mkt_menor, mkt_delta_str,
-            {"produto_key": produto_key}, no_update
+            {"produto_key": produto_key, "area": area}, no_update
         )
+
+    return (
+        fin_open, no_update, no_update, no_update, no_update, no_update,
+        mkt_open, no_update, no_update, no_update,
+        no_update, no_update
+    )
 
 
 # ---------- Atualização do preço estimado no modal mercado (quando delta muda) ----------
@@ -988,6 +1069,7 @@ def update_mkt_estimate(delta, selected, rowData):
 @app.callback(
     Output("download-excel", "data"),
     Input("btn-export", "n_clicks"),
+    State("mes_ref", "value"),
     State("tabs", "active_tab"),
     State("forn", "value"),
     State("fab", "value"),
@@ -997,25 +1079,23 @@ def update_mkt_estimate(delta, selected, rowData):
     State("store-sim", "data"),
     prevent_initial_call=True,
 )
-def export_excel(_, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_store):
-    if df_base.empty:
+def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_store):
+    df_base, _, _, _, _, _, _ = _get_data_for_mes_ref(mes_ref)
+    if df_base is None or df_base.empty:
         return no_update
 
-    # O desktop exporta df_view_atual (RAW) e muda o nome por aba.
     if active_tab in ("tab-1", "tab-2"):
-        df_view = _filter_tab12(forn, fab, cat)
+        df_view = _filter_tab12(df_base, forn, fab, cat)
         nome_tipo = "FINANCEIRO" if active_tab == "tab-1" else "MERCADO"
     else:
-        df_view = _filter_tab3(cat_t3, forn_t3)
+        df_view = _filter_tab3(df_base, cat_t3, forn_t3)
         nome_tipo = "CATEGORIA"
 
     if df_view is None or df_view.empty:
         return no_update
 
-    # Aplica simulações ao DF exportado como o desktop faria (df_base tinha colunas Sim_*).
     df_out = df_view.copy()
 
-    # garante colunas
     for c in ["Sim_Manual_Ativa", "Sim_Preco_Manual", "Sim_Margem_Manual", "Sim_Conc_Ativa", "Sim_Conc_Delta"]:
         if c not in df_out.columns:
             df_out[c] = False if c.endswith("_Ativa") else 0.0
