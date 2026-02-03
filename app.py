@@ -186,13 +186,15 @@ def _format_kpi(label: str, value: str, color: str | None = None):
     )
 
 
-def _breakdown_component(breakdown: List[Dict[str, Any]]):
+def _breakdown_component(breakdown: List[Dict[str, Any]], month_ctx: Dict[str, Any] | None = None):
+    lab = _closed_month_label(month_ctx)
+
     header = html.Thead(
         html.Tr(
             [
                 html.Th("CATEGORIA"),
-                html.Th("FAT(Nov)"),
-                html.Th("MG(Nov)"),
+                html.Th(f"FAT({lab})"),
+                html.Th(f"MG({lab})"),
                 html.Th("GL(Year)"),
             ]
         )
@@ -213,7 +215,8 @@ def _breakdown_component(breakdown: List[Dict[str, Any]]):
     return dbc.Table([header, body], bordered=True, size="sm", className="breakdown-table")
 
 
-def _history_component(hist: Dict[str, Any], suffix: str):
+def _history_component(hist: Dict[str, Any], suffix: str, month_ctx: Dict[str, Any] | None = None):
+    lab = _closed_month_label(month_ctx)
     return html.Div(
         [
             html.Div("Detalhes (Inteligência Temporal):", style={"fontWeight": "700", "color": "navy"}),
@@ -229,8 +232,8 @@ def _history_component(hist: Dict[str, Any], suffix: str):
             ),
             html.Div(
                 [
-                    html.Span("Venda Nov: ", style={"width": "90px", "display": "inline-block"}),
-                    html.Span(hist.get("hist_nov", "-"), style={"fontWeight": "700", "color": "blue"}),
+                    html.Span(f"Venda {lab}: ", style={"width": "90px", "display": "inline-block"}),
+                    html.Span(hist.get("hist_ref", "-"), style={"fontWeight": "700", "color": "blue"}),
                     html.Span("  "),
                     html.Span("Pico: ", style={"width": "50px", "display": "inline-block", "marginLeft": "10px"}),
                     html.Span(hist.get("hist_pico", "-"), style={"fontWeight": "700", "color": "green"}),
@@ -258,6 +261,21 @@ def _row_from_event(cell_event: dict, rowData: list[dict] | None):
 
     return None
 
+_PT_ABBR = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+
+def _closed_month_label(month_ctx: Dict[str, Any] | None) -> str:
+    ctx = month_ctx or {}
+    ts = ctx.get("closed_month")
+    if isinstance(ts, pd.Timestamp):
+        return f"{_PT_ABBR[ts.month - 1]}/{ts.year}"
+
+    safe = ctx.get("closed_month_safe")  # "YYYY_MM"
+    y, m = _parse_ym_safe(str(safe)) if safe else (None, None)
+    if y and m:
+        return f"{_PT_ABBR[m - 1]}/{y}"
+
+    return "Mês Fechado"
+
 
 # ---------- Dash app ----------
 app = Dash(
@@ -276,7 +294,7 @@ coldefs_t1 = [
     {"headerName": "Produto", "field": "Produto", "width": 260},
     {"headerName": "ABC", "field": "ABC", "width": 70},
     {"headerName": "Categ", "field": "Categ", "width": 140},
-    {"headerName": "Qtd Nov", "field": "Qtd Nov", "width": 95},
+    {"headerName": "Qtd Ref", "field": "Qtd Ref", "width": 95},
     {"headerName": "Preço Atual", "field": "Preço Atual", "width": 110},
     {"headerName": "Custo", "field": "Custo", "width": 110},
     {"headerName": "Marg R$", "field": "Marg R$", "width": 110},
@@ -294,7 +312,7 @@ coldefs_t2 = [
     {"headerName": "Produto", "field": "Produto", "width": 260},
     {"headerName": "ABC", "field": "ABC", "width": 70},
     {"headerName": "Categ", "field": "Categ", "width": 140},
-    {"headerName": "Qtd Nov", "field": "Qtd Nov", "width": 95},
+    {"headerName": "Qtd Ref", "field": "Qtd Ref", "width": 95},
     {"headerName": "Preço Atual", "field": "Preço Atual", "width": 110},
     {"headerName": "Custo", "field": "Custo", "width": 110},
     {"headerName": "Marg Atual %", "field": "Marg Atual %", "width": 115},
@@ -308,9 +326,9 @@ coldefs_t2 = [
 
 coldefs_t3 = [
     {"headerName": "Fornecedor", "field": "Fornecedor", "width": 320},
-    {"headerName": "Fat Nov", "field": "Fat Nov", "width": 160},
-    {"headerName": "Margem Nov R$", "field": "Margem Nov R$", "width": 160},
-    {"headerName": "Margem Nov %", "field": "Margem Nov %", "width": 140},
+    {"headerName": "Fat Ref", "field": "Fat Ref", "width": 160},
+    {"headerName": "Margem Ref R$", "field": "Margem Ref R$", "width": 160},
+    {"headerName": "Margem Ref %", "field": "Margem Ref %", "width": 140},
 ]
 
 
@@ -359,15 +377,12 @@ def make_summary_block(suffix: str):
                         dbc.Col(
                             [
                                 html.Div("Top Categorias (Forn. vs Benchmarks):", style={"fontWeight": "700"}),
-                                html.Div(id=f"breakdown-{suffix}", children=_breakdown_component([])),
+                                html.Div(id=f"breakdown-{suffix}", children=_breakdown_component([], month_ctx0)),
                             ],
                             md=7,
                         ),
                         dbc.Col(
-                            _history_component(
-                                {"produto": "Selecione...", "hist_6m": "-", "hist_3m": "-", "hist_nov": "-", "hist_pico": "-"},
-                                suffix,
-                            ),
+                            _history_component({"produto": "Selecione...", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"}, suffix, month_ctx0),
                             md=5,
                         ),
                     ],
@@ -648,6 +663,36 @@ def on_mes_ref_change(mes_ref):
     return forn_opts, forn_val, cat_opts, None
 
 
+def _set_header(coldefs, field, header):
+    out = []
+    for c in coldefs:
+        c2 = dict(c)
+        if c2.get("field") == field:
+            c2["headerName"] = header
+        out.append(c2)
+    return out
+
+@app.callback(
+    Output("grid-t1", "columnDefs"),
+    Output("grid-t2", "columnDefs"),
+    Output("grid-t3", "columnDefs"),
+    Input("mes_ref", "value"),
+)
+def update_grid_headers(mes_ref):
+    _, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(mes_ref)
+    lab = _closed_month_label(month_ctx)
+
+    t1 = _set_header(coldefs_t1, "Qtd Ref", f"Qtd {lab}")
+    t2 = _set_header(coldefs_t2, "Qtd Ref", f"Qtd {lab}")
+
+    t3 = coldefs_t3
+    t3 = _set_header(t3, "Fat Ref", f"Fat {lab}")
+    t3 = _set_header(t3, "Margem Ref R$", f"Margem {lab} R$")
+    t3 = _set_header(t3, "Margem Ref %", f"Margem {lab} %")
+
+    return t1, t2, t3
+
+
 @app.callback(
     Output("fab", "options"),
     Output("fab", "value"),
@@ -742,13 +787,13 @@ def refresh_all(_, active_tab, mes_ref, forn, fab, cat, meta_t1, meta_t2, cat_t3
         rows_t3,
 
         kpi_children(sum_t1),
-        _breakdown_component(sum_t1["breakdown"]),
+        _breakdown_component(sum_t1["breakdown"], month_ctx),
 
         kpi_children(sum_t2),
-        _breakdown_component(sum_t2["breakdown"]),
+        _breakdown_component(sum_t2["breakdown"], month_ctx),
 
         kpi_children(sum_t3),
-        _breakdown_component(sum_t3["breakdown"]),
+        _breakdown_component(sum_t3["breakdown"], month_ctx),
     )
 
 
@@ -785,11 +830,13 @@ def fit_columns_on_visible_tab(active_tab):
     Input("tabs", "active_tab"),
 )
 def on_cell_click(cell1, cell2, rowData1, rowData2, mes_ref, forn, fab, cat, active_tab):
-    hist_default = {"produto": "Selecione...", "hist_6m": "-", "hist_3m": "-", "hist_nov": "-", "hist_pico": "-"}
+    hist_default = {"produto": "Selecione...", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"}
+
+    df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(mes_ref)
 
     trig = ctx.triggered_id
     if trig in ("mes_ref", "forn", "fab", "cat", "tabs"):
-        return _history_component(hist_default, "t1").children, _history_component(hist_default, "t2").children
+        return _history_component(hist_default, "t1", month_ctx).children, _history_component(hist_default, "t2", month_ctx).children
 
     df_base, _, _, _, _, _, _ = _get_data_for_mes_ref(mes_ref)
     if df_base is None or df_base.empty:
@@ -800,14 +847,14 @@ def on_cell_click(cell1, cell2, rowData1, rowData2, mes_ref, forn, fab, cat, act
         produto_key = (row_grid or {}).get("_produto_key") or (row_grid or {}).get("id")
         if produto_key and produto_key in df_base.index:
             row = df_base.loc[produto_key]
-            return _history_component(build_history_payload(row), "t1").children, no_update
+            return _history_component(build_history_payload(row), "t1", month_ctx).children, no_update
 
     if trig == "grid-t2" and active_tab == "tab-2" and isinstance(cell2, dict):
         row_grid = _row_from_event(cell2, rowData2)
         produto_key = (row_grid or {}).get("_produto_key") or (row_grid or {}).get("id")
         if produto_key and produto_key in df_base.index:
             row = df_base.loc[produto_key]
-            return no_update, _history_component(build_history_payload(row), "t2").children
+            return no_update, _history_component(build_history_payload(row), "t2", month_ctx).children
 
     return no_update, no_update
 

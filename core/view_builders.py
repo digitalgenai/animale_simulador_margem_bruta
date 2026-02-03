@@ -162,7 +162,7 @@ def build_tab1_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
                 "Produto": str(produto_nome),
                 "ABC": fmt_str(row.get("Curva_ABC")),
                 "Categ": fmt_str(row.get("Area")),
-                "Qtd Nov": fmt_qtd(row.get("Qtd_Media_Mensal", 0.0)),
+                "Qtd Ref": fmt_qtd(row.get("Qtd_Media_Mensal", 0.0)),
 
                 "Preço Atual": fmt_real(p_atual),
                 "Custo": fmt_real(c_atual),
@@ -244,7 +244,7 @@ def build_tab2_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
                 "Produto": str(produto_nome),
                 "ABC": fmt_str(row.get("Curva_ABC")),
                 "Categ": fmt_str(row.get("Area")),
-                "Qtd Nov": fmt_qtd(row.get("Qtd_Media_Mensal", 0.0)),
+                "Qtd Ref": fmt_qtd(row.get("Qtd_Media_Mensal", 0.0)),
 
                 "Preço Atual": fmt_real(p_atual),
                 "Custo": fmt_real(c_atual),
@@ -281,26 +281,26 @@ def build_tab3_rows(df_view_atual: pd.DataFrame) -> List[Dict[str, Any]]:
     if df_view_atual is None or df_view_atual.empty:
         return rows
 
-    if "Fat_Nov" not in df_view_atual.columns:
-        df_view_atual = df_view_atual.assign(Fat_Nov=0.0)
-    if "Marg_Val_Nov" not in df_view_atual.columns:
-        df_view_atual = df_view_atual.assign(Marg_Val_Nov=0.0)
+    if "Fat_Ref" not in df_view_atual.columns:
+        df_view_atual = df_view_atual.assign(Fat_Ref=0.0)
+    if "Marg_Val_Ref" not in df_view_atual.columns:
+        df_view_atual = df_view_atual.assign(Marg_Val_Ref=0.0)
 
-    df_agg = df_view_atual.groupby("Fornecedor")[["Fat_Nov", "Marg_Val_Nov"]].sum()
-    df_agg = df_agg.sort_values("Fat_Nov", ascending=False)
+    df_agg = df_view_atual.groupby("Fornecedor")[["Fat_Ref", "Marg_Val_Ref"]].sum()
+    df_agg = df_agg.sort_values("Fat_Ref", ascending=False)
 
     for forn_nome, row in df_agg.iterrows():
-        f_nov = float(row["Fat_Nov"])
-        m_nov_val = float(row["Marg_Val_Nov"])
-        m_nov_perc = (m_nov_val / f_nov) if f_nov > 0 else 0.0
+        f_ref = float(row["Fat_Ref"])
+        m_ref_val = float(row["Marg_Val_Ref"])
+        m_ref_perc = (m_ref_val / f_ref) if f_ref > 0 else 0.0
 
         rows.append(
             {
                 "id": str(forn_nome),
                 "Fornecedor": str(forn_nome),
-                "Fat Nov": fmt_real(f_nov),
-                "Margem Nov R$": fmt_real(m_nov_val),
-                "Margem Nov %": fmt_perc(m_nov_perc),
+                "Fat Ref": fmt_real(f_ref),
+                "Margem Ref R$": fmt_real(m_ref_val),
+                "Margem Ref %": fmt_perc(m_ref_perc),
             }
         )
 
@@ -316,6 +316,6 @@ def build_history_payload(row: pd.Series) -> Dict[str, Any]:
         "produto": (produto_nome[:30] + "...") if len(produto_nome) > 30 else produto_nome,
         "hist_6m": fmt_media(row.get("Hist_Qtd_Media_6M", 0.0)),
         "hist_3m": fmt_media(row.get("Hist_Qtd_Media_3M", 0.0)),
-        "hist_nov": fmt_media(row.get("Qtd_Media_Mensal", 0.0)),
+        "hist_ref": fmt_media(row.get("Qtd_Media_Mensal", 0.0)),
         "hist_pico": f"{row.get('Hist_Mes_Pico','SEM_INFO')} ({fmt_qtd(row.get('Hist_Qtd_Pico', 0.0))})",
     }

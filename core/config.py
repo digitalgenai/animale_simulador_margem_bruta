@@ -39,10 +39,6 @@ ALERTA_PRECO_ALTO = " 🔺"
 # --- Meses (corrigido: 12 meses, incluindo Dez) ---
 LISTA_MESES_ANO = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 
-# Mantidos por compat (ideal: usar month_context do data_loader)
-MESES_6M = ["Jul", "Ago", "Set", "Out", "Nov", "Dez"]
-MESES_3M = ["Out", "Nov", "Dez"]
-
 # --- Colunas textuais ---
 TEXT_COLS = ["Fornecedor", "Fabricante", "Area", "Produto", "SKU", "Curva_ABC", "Cod_Barras", "Hist_Mes_Pico"]
 

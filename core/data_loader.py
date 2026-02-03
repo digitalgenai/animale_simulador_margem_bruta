@@ -15,8 +15,6 @@ from core.config import (
     BASE_NUM_COLS,
     AUX_NUM_COLS,
     LISTA_MESES_ANO,
-    MESES_6M,  # mantido por compat (mesmo não usando diretamente aqui)
-    MESES_3M,  # mantido por compat (mesmo não usando diretamente aqui)
     SIM_COLS_DEFAULTS,
     col_conc_1,
     col_conc_2,
@@ -273,7 +271,7 @@ def load_base_data(
     ref_year/ref_month:
       - representa o Mês/Ano selecionado no UI (ex: 2026/01)
       - "closed_month" = mês anterior (ex: 2025/12) será usado como base para:
-          Qtd_Nov, Fat_Nov, Marg_Val_Nov e derivados (Preço Atual, Custo, Margens...)
+          Qtd_Ref, Fat_Ref, Marg_Val_Ref e derivados (Preço Atual, Custo, Margens...)
     """
     schema = schema or PGSCHEMA_DEFAULT
     table = table or PGTABLE_DEFAULT
@@ -568,10 +566,6 @@ def load_base_data(
     df_base["ABC"] = df_base["Curva_ABC"]
     df_base["Categ"] = df_base["Area"]
 
-    # =========================================
-    # MÊS-REF para "Nov": mês ANTERIOR ao selecionado (ref_month - 1)
-    # =========================================
-    # encontra o SAFE correspondente ao closed_month dentro da janela
     idx_closed = (closed_month_start.year - start_month.year) * 12 + (closed_month_start.month - start_month.month)
 
     if 0 <= idx_closed < len(labels_safe):
@@ -585,7 +579,7 @@ def load_base_data(
     qtd_ref = f"Qtd_{mes_ref_safe}"
 
     mes_ref_label = safe_to_legacy.get(mes_ref_safe, mes_ref_safe)
-    logger.info("mes_ref_safe(NOV)= %s | label=%s", mes_ref_safe, mes_ref_label)
+    logger.info("mes_ref_safe(MÊS_FECHADO)= %s | label=%s", mes_ref_safe, mes_ref_label)
 
     missing = [c for c in (fat_ref, marg_ref, qtd_ref) if c not in df_base.columns]
     if missing:
@@ -594,14 +588,14 @@ def load_base_data(
     # =========================================
     # Derivadas do mês ref (NOV = mês fechado)
     # =========================================
-    df_base["Qtd_Nov"] = df_base[qtd_ref].fillna(0.0).round().astype(int)
+    df_base["Qtd_Ref"] = df_base[qtd_ref].fillna(0.0).round().astype(int)
     df_base["Preco_Atual"] = _safe_div(df_base[fat_ref], df_base[qtd_ref])
     df_base["Custo"] = _safe_div(df_base[fat_ref] - df_base[marg_ref], df_base[qtd_ref])
     df_base["Marg_Unit"] = _safe_div(df_base[marg_ref], df_base[qtd_ref])
     df_base["Marg_Perc"] = _safe_div(df_base[marg_ref], df_base[fat_ref])
 
     # Aliases grid
-    df_base["Qtd Nov"] = df_base["Qtd_Nov"]
+    df_base["Qtd Nov"] = df_base["Qtd_Ref"]
     df_base["Preço Atual"] = df_base["Preco_Atual"]
     df_base["Marg R$"] = df_base["Marg_Unit"]
     df_base["Marg %"] = df_base["Marg_Perc"]
@@ -613,11 +607,11 @@ def load_base_data(
     df_base["Preco_Mais_Recente"] = df_base["Preco_Atual"]
     df_base["Custo_Mais_Recente"] = df_base["Custo"]
 
-    df_base["Qtd_Media_Mensal"] = df_base["Qtd_Nov"]
+    df_base["Qtd_Media_Mensal"] = df_base["Qtd_Ref"]
 
-    # Tab3 do view_builders usa Fat_Nov / Marg_Val_Nov
-    df_base["Fat_Nov"] = df_base[fat_ref]
-    df_base["Marg_Val_Nov"] = df_base[marg_ref]
+    # Tab3 do view_builders usa Fat_Ref / Marg_Val_Ref
+    df_base["Fat_Ref"] = df_base[fat_ref]
+    df_base["Marg_Val_Ref"] = df_base[marg_ref]
 
     # =========================================================
     # HISTÓRICOS (6M / 3M / Pico) - usando LEGACY (compat)
