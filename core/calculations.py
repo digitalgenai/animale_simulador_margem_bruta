@@ -35,10 +35,22 @@ def is_estetica_saude(area: Optional[str]) -> bool:
 
 
 def _taxa_deducao(area: Optional[str] = None, taxa_extra: float = 0.0) -> float:
+    """
+    Retorna a taxa de dedução aplicável.
+
+    Regra:
+    - Padrão: TAXA_DEDUCAO_FATURAMENTO (ex: 22,03%)
+    - Se Area for Estética e/ou Saúde: TAXA_ESTETICA_SAUDE (2,08%) -> substitui a padrão
+    - taxa_extra (opcional) é somada ao resultado final
+    """
     extra = float(taxa_extra or 0.0)
+
     if area is not None and is_estetica_saude(area):
-        extra += TAXA_ESTETICA_SAUDE
-    return TAXA_DEDUCAO_FATURAMENTO + extra
+        base = TAXA_ESTETICA_SAUDE
+    else:
+        base = TAXA_DEDUCAO_FATURAMENTO
+
+    return base + extra
 
 
 def get_menor_concorrente(row: dict) -> float:
