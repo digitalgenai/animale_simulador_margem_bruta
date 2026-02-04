@@ -390,15 +390,25 @@ def load_base_data(
             SUM(total_item)  AS fat,
             SUM(lucro_total) AS marg_val
         FROM {full}
-        WHERE data_venda >= :start_dt
-          AND data_venda <  :end_dt
-          AND data_venda IS NOT NULL
+        WHERE data_venda IS NOT NULL
+        AND date_trunc('month', data_venda)::date >= :start_month
+        AND date_trunc('month', data_venda)::date <= :ref_month
         GROUP BY
             cod_produto, produto, fornecedor, fabricante, area, mes
         """
     )
 
-    df_win = pd.read_sql(sql, engine, params={"start_dt": start_month, "end_dt": end_month_excl})
+    df_win = pd.read_sql(
+        sql,
+        engine,
+        params={"start_month": start_month, "ref_month": ref_month_start},
+    )
+
+    logger.info("df_win rows=%s", len(df_win))
+    if not df_win.empty:
+        logger.info("df_win mes(min/max)=%s..%s", df_win["mes"].min(), df_win["mes"].max())
+    else:
+        logger.warning("df_win veio vazio para start=%s end=%s (ref=%s)", start_month, end_month_excl, ref_month_start)
 
     if df_win.empty:
         logger.warning("Sem dados na janela SQL [%s..%s).", start_month.date(), end_month_excl.date())
