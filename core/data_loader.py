@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from typing import Dict, Tuple, List, Optional
 
 import numpy as np
@@ -22,6 +23,12 @@ from core.config import (
     PGSCHEMA_DEFAULT,
     PGTABLE_DEFAULT,
     N_MESES_JANELA,
+    # coleta (concorrentes)
+    PGSCHEMA_COLETA_DEFAULT,
+    COLETA_TABLE_MISSAO_DEFAULT,
+    COLETA_TABLE_MISSAO_PRODUTO_DEFAULT,
+    COLETA_TABLE_CONCORRENTE_DEFAULT,
+    COLETA_TABLE_PRODUTO_DEFAULT,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,6 +62,10 @@ _PT_ABBR_SET = {m.lower() for m in _PT_ABBR}
 
 # Cache simples dos meses disponíveis (pra não ficar fazendo DISTINCT sempre)
 _AVAILABLE_MONTHS_CACHE: Dict[str, List[pd.Timestamp]] = {}
+
+# Cache de metadados do schema coleta (tabelas/colunas)
+_COLETA_TABLES_CACHE: Dict[str, Dict[str, str]] = {}   # schema -> {lower_name: actual_name}
+_COLETA_COLS_CACHE: Dict[str, Dict[str, str]] = {}     # "schema.table" -> {lower_col: actual_col}
 
 
 def get_month_context() -> Dict[str, object]:
@@ -279,6 +290,403 @@ def _fetch_available_months(engine: Engine, full_table: str) -> List[pd.Timestam
 
 
 # ======================================================================================
+# Concorrência (schema coleta)
+# ======================================================================================
+
+def _norm_txt(s: str) -> str:
+    if s is None:
+        return ""
+    s2 = str(s).strip().lower()
+    s2 = unicodedata.normalize("NFKD", s2)
+    s2 = "".join(ch for ch in s2 if not unicodedata.combining(ch))
+    return s2
+
+
+def _quote_ident(name: str) -> str:
+    s = str(name)
+    # identificadores simples (sem quote) -> mais rápido/limpo
+    if re.match(r"^[a-z_][a-z0-9_]*$", s):
+        return s
+    return '"' + s.replace('"', '""') + '"'
+
+
+def _qual(schema: str, table: str) -> str:
+    return f"{_quote_ident(schema)}.{_quote_ident(table)}"
+
+
+def _get_coleta_tables_lower(engine: Engine, schema: str) -> Dict[str, str]:
+    if schema in _COLETA_TABLES_CACHE:
+        return _COLETA_TABLES_CACHE[schema]
+
+    sql = text(
+        """
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = :schema
+        """
+    )
+    df = pd.read_sql(sql, engine, params={"schema": schema})
+    mp: Dict[str, str] = {}
+    if not df.empty and "table_name" in df.columns:
+        for t in df["table_name"].astype(str).tolist():
+            mp[t.lower()] = t
+    _COLETA_TABLES_CACHE[schema] = mp
+    return mp
+
+
+def _resolve_table(engine: Engine, schema: str, candidates: List[str]) -> Optional[str]:
+    tables = _get_coleta_tables_lower(engine, schema)
+    if not tables:
+        return None
+    for c in candidates:
+        if not c:
+            continue
+        key = str(c).strip().lower()
+        if key in tables:
+            return tables[key]
+    return None
+
+
+def _get_coleta_cols_lower(engine: Engine, schema: str, table: str) -> Dict[str, str]:
+    key = f"{schema}.{table}"
+    if key in _COLETA_COLS_CACHE:
+        return _COLETA_COLS_CACHE[key]
+
+    sql = text(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = :schema AND table_name = :table
+        """
+    )
+    df = pd.read_sql(sql, engine, params={"schema": schema, "table": table})
+    mp: Dict[str, str] = {}
+    if not df.empty and "column_name" in df.columns:
+        for c in df["column_name"].astype(str).tolist():
+            mp[c.lower()] = c
+    _COLETA_COLS_CACHE[key] = mp
+    return mp
+
+
+def _pick_col(cols_lower: Dict[str, str], candidates: List[str]) -> Optional[str]:
+    for c in candidates:
+        if not c:
+            continue
+        key = str(c).strip().lower()
+        if key in cols_lower:
+            return cols_lower[key]
+    return None
+
+
+def _parse_price_series(s: pd.Series) -> pd.Series:
+    """
+    Converte preços vindos do coleta (às vezes texto com vírgula/mascara) -> float.
+    """
+    if s is None:
+        return pd.Series(dtype=float)
+    out = s.astype(str).str.strip()
+    out = out.str.replace(",", ".", regex=False)
+    out = out.str.replace(r"[^\d\.\-]", "", regex=True)
+    return pd.to_numeric(out, errors="coerce").fillna(0.0)
+
+
+def _map_concorrente_to_target_col(nome_conc: str) -> Optional[str]:
+    """
+    Mapeia concorrente -> coluna do simulador (col_conc_1 / col_conc_2).
+    Heurística (robusta): contém 'petz' ou 'procampo' no nome normalizado.
+    """
+    n = _norm_txt(nome_conc or "")
+    if not n:
+        return None
+    if "petz" in n:
+        return col_conc_1
+    if "procampo" in n:
+        return col_conc_2
+    return None
+
+
+def _load_competitor_prices(engine: Engine, ref_month_start: Optional[pd.Timestamp]) -> pd.DataFrame:
+    """
+    Busca preços de concorrentes no schema coleta, relacionando:
+      missao (concorrente_id) + missao_produto (produto_id + preço) + (produto -> SKU)
+    Retorna DF wide: [SKU, col_conc_1, col_conc_2]
+    """
+    schema = PGSCHEMA_COLETA_DEFAULT
+
+    try:
+        # Resolve tabelas (candidates + env override)
+        missao_tbl = _resolve_table(
+            engine,
+            schema,
+            [
+                COLETA_TABLE_MISSAO_DEFAULT,
+                "missao",
+                "missoes",
+            ],
+        )
+        mp_tbl = _resolve_table(
+            engine,
+            schema,
+            [
+                COLETA_TABLE_MISSAO_PRODUTO_DEFAULT,
+                "missao_produto",
+                "missaoproduto",
+                "missaoProduto",
+                "missao_produtos",
+                "missaoprodutos",
+            ],
+        )
+        conc_tbl = _resolve_table(
+            engine,
+            schema,
+            [
+                COLETA_TABLE_CONCORRENTE_DEFAULT,
+                "concorrente",
+                "concorrentes",
+            ],
+        )
+        prod_tbl = _resolve_table(
+            engine,
+            schema,
+            [
+                COLETA_TABLE_PRODUTO_DEFAULT,
+                "produto",
+                "produtos",
+            ],
+        )
+
+        if not missao_tbl or not mp_tbl or not conc_tbl:
+            logger.warning(
+                "Concorrência (coleta) indisponível: tabelas essenciais não encontradas. missao=%s mp=%s conc=%s",
+                missao_tbl,
+                mp_tbl,
+                conc_tbl,
+            )
+            return pd.DataFrame()
+
+        m_cols = _get_coleta_cols_lower(engine, schema, missao_tbl)
+        mp_cols = _get_coleta_cols_lower(engine, schema, mp_tbl)
+        c_cols = _get_coleta_cols_lower(engine, schema, conc_tbl)
+        p_cols = _get_coleta_cols_lower(engine, schema, prod_tbl) if prod_tbl else {}
+
+        # Colunas/joins
+        m_id = _pick_col(m_cols, ["id", "missao_id"])
+        m_conc_id = _pick_col(m_cols, ["concorrente_id", "id_concorrente", "concorrenteid"])
+
+        c_id = _pick_col(c_cols, ["id", "concorrente_id"])
+        c_nome = _pick_col(c_cols, ["nome", "name", "descricao", "razao_social"])
+
+        mp_missao_id = _pick_col(mp_cols, ["missao_id", "id_missao", "missaoid"])
+        mp_produto_id = _pick_col(mp_cols, ["produto_id", "id_produto", "produtoid"])
+        mp_preco = _pick_col(
+            mp_cols,
+            [
+                "preco",
+                "preco_coletado",
+                "preco_venda",
+                "preco_atual",
+                "preco_praticado",
+                "valor",
+                "price",
+            ],
+        )
+        mp_id = _pick_col(mp_cols, ["id", "missao_produto_id", "missaoproduto_id"])
+
+        if not (m_id and m_conc_id and c_id and c_nome and mp_missao_id and mp_preco):
+            logger.warning(
+                "Concorrência (coleta): colunas essenciais não encontradas. "
+                "m_id=%s m_conc_id=%s c_id=%s c_nome=%s mp_missao_id=%s mp_preco=%s",
+                m_id,
+                m_conc_id,
+                c_id,
+                c_nome,
+                mp_missao_id,
+                mp_preco,
+            )
+            return pd.DataFrame()
+
+        # Como obter SKU:
+        # 1) Preferencial: join com tabela produto (id -> sku/cod_produto)
+        p_id = _pick_col(p_cols, ["id", "produto_id"]) if p_cols else None
+        p_sku = _pick_col(
+            p_cols,
+            [
+                "sku",
+                "cod_produto",
+                "codigo",
+                "codigo_produto",
+                "codproduto",
+                "cod_prod",
+                "produto_codigo",
+                "codigo_interno",
+                "id_externo",
+            ],
+        ) if p_cols else None
+
+        # 2) Fallback: SKU direto em missao_produto
+        mp_sku = _pick_col(
+            mp_cols,
+            [
+                "sku",
+                "cod_produto",
+                "codigo_produto",
+                "codigo",
+                "codproduto",
+                "cod_prod",
+            ],
+        )
+
+        use_prod_join = bool(prod_tbl and p_id and p_sku and mp_produto_id)
+
+        if not use_prod_join and not mp_sku:
+            logger.warning(
+                "Concorrência (coleta): não consegui inferir SKU. "
+                "Sem join produto (prod_tbl=%s p_id=%s p_sku=%s mp_produto_id=%s) e sem SKU no missao_produto.",
+                prod_tbl,
+                p_id,
+                p_sku,
+                mp_produto_id,
+            )
+            return pd.DataFrame()
+
+        # Coluna de data (para pegar o "mais recente" e/ou filtrar por mês)
+        m_dt = _pick_col(
+            m_cols,
+            [
+                "data",
+                "data_missao",
+                "data_execucao",
+                "data_coleta",
+                "dt",
+                "dt_execucao",
+                "dt_coleta",
+                "created_at",
+                "updated_at",
+            ],
+        )
+
+        m_alias = "m"
+        c_alias = "c"
+        mp_alias = "mp"
+        p_alias = "p"
+
+        missao_q = _qual(schema, missao_tbl)
+        conc_q = _qual(schema, conc_tbl)
+        mp_q = _qual(schema, mp_tbl)
+        prod_q = _qual(schema, prod_tbl) if prod_tbl else ""
+
+        sku_expr = f"{p_alias}.{_quote_ident(p_sku)}" if use_prod_join else f"{mp_alias}.{_quote_ident(mp_sku)}"
+        conc_expr = f"{c_alias}.{_quote_ident(c_nome)}"
+        preco_expr = f"{mp_alias}.{_quote_ident(mp_preco)}"
+
+        dt_expr = f"{m_alias}.{_quote_ident(m_dt)}" if m_dt else "NULL"
+
+        join_prod_sql = ""
+        if use_prod_join:
+            join_prod_sql = (
+                f"\n        JOIN {prod_q} {p_alias} ON {p_alias}.{_quote_ident(p_id)} = {mp_alias}.{_quote_ident(mp_produto_id)}"
+            )
+
+        # ORDER BY para DISTINCT ON
+        if m_dt:
+            order_tail = f"{dt_expr} DESC NULLS LAST"
+            if mp_id:
+                order_tail += f", {mp_alias}.{_quote_ident(mp_id)} DESC"
+        else:
+            # sem data: usa id do item (se existir) como "mais recente"
+            if mp_id:
+                order_tail = f"{mp_alias}.{_quote_ident(mp_id)} DESC"
+            else:
+                order_tail = "1"
+
+        def _query(use_month_filter: bool) -> pd.DataFrame:
+            where_parts = [f"{preco_expr} IS NOT NULL"]
+
+            params = {}
+            if use_month_filter and m_dt and isinstance(ref_month_start, pd.Timestamp):
+                where_parts.append(f"date_trunc('month', {dt_expr})::date = :ref_month")
+                params["ref_month"] = pd.Timestamp(ref_month_start).normalize().date()
+
+            where_sql = " AND ".join(where_parts)
+
+            sql = text(
+                f"""
+                SELECT DISTINCT ON ({sku_expr}, {conc_expr})
+                    {sku_expr}  AS "SKU",
+                    {conc_expr} AS "Concorrente",
+                    {preco_expr} AS "Preco",
+                    {dt_expr}   AS "Dt"
+                FROM {missao_q} {m_alias}
+                JOIN {conc_q} {c_alias}
+                    ON {c_alias}.{_quote_ident(c_id)} = {m_alias}.{_quote_ident(m_conc_id)}
+                JOIN {mp_q} {mp_alias}
+                    ON {mp_alias}.{_quote_ident(mp_missao_id)} = {m_alias}.{_quote_ident(m_id)}
+                {join_prod_sql}
+                WHERE {where_sql}
+                ORDER BY {sku_expr}, {conc_expr}, {order_tail}
+                """
+            )
+
+            try:
+                return pd.read_sql(sql, engine, params=params)
+            except Exception:
+                logger.exception("Falha ao consultar concorrência em %s (use_month_filter=%s).", schema, use_month_filter)
+                return pd.DataFrame()
+
+        # 1) tenta filtrar pelo mês selecionado (se existir data)
+        df_raw = _query(use_month_filter=True)
+
+        # 2) fallback: se não veio nada, pega o mais recente geral
+        if df_raw.empty:
+            df_raw = _query(use_month_filter=False)
+
+        if df_raw.empty:
+            return pd.DataFrame()
+
+        # Normalização
+        df_raw["SKU"] = df_raw["SKU"].astype(str).str.strip()
+        df_raw["Concorrente"] = df_raw["Concorrente"].astype(str).str.strip()
+        df_raw["Preco"] = _parse_price_series(df_raw["Preco"])
+
+        # mapeia apenas concorrentes do simulador (PETZ / PROCAMPO)
+        df_raw["__target_col"] = df_raw["Concorrente"].apply(_map_concorrente_to_target_col)
+        df_raw = df_raw[df_raw["__target_col"].notna()].copy()
+        if df_raw.empty:
+            return pd.DataFrame()
+
+        # mantém apenas preços > 0
+        df_raw = df_raw[df_raw["Preco"] > 0].copy()
+        if df_raw.empty:
+            return pd.DataFrame()
+
+        # wide
+        df_wide = (
+            df_raw.pivot_table(
+                index="SKU",
+                columns="__target_col",
+                values="Preco",
+                aggfunc="max",
+            )
+            .reset_index()
+        )
+
+        # garante colunas finais
+        if col_conc_1 not in df_wide.columns:
+            df_wide[col_conc_1] = 0.0
+        if col_conc_2 not in df_wide.columns:
+            df_wide[col_conc_2] = 0.0
+
+        df_wide[col_conc_1] = pd.to_numeric(df_wide[col_conc_1], errors="coerce").fillna(0.0)
+        df_wide[col_conc_2] = pd.to_numeric(df_wide[col_conc_2], errors="coerce").fillna(0.0)
+
+        return df_wide[["SKU", col_conc_1, col_conc_2]]
+
+    except Exception:
+        logger.exception("Falha geral ao carregar concorrência do schema coleta.")
+        return pd.DataFrame()
+
+
+# ======================================================================================
 # Main
 # ======================================================================================
 
@@ -302,6 +710,10 @@ def load_base_data(
       - representa o Mês/Ano selecionado no UI (ex: 2026/01)
       - AGORA: métricas "Ref" (Qtd_Ref, Fat_Ref, Marg_Val_Ref etc.) usam o PRÓPRIO mês selecionado.
         (antes usava mês anterior "fechado", por isso Jan/2026 mostrava Dez/2025)
+
+    Importante (pedido):
+      - schema 'stage' => somente obt_faturamento (faturamento)
+      - schema 'coleta' => concorrentes (preços) via missao/concorrente/missao_produto
     """
     schema = schema or PGSCHEMA_DEFAULT
     table = table or PGTABLE_DEFAULT
@@ -376,7 +788,7 @@ def load_base_data(
         n,
     )
 
-    # 4) Query AGREGADA (bem mais rápida): SKU x mês
+    # 4) Query AGREGADA (bem mais rápida): SKU x mês (stage.obt_faturamento)
     sql = text(
         f"""
         SELECT
@@ -537,6 +949,28 @@ def load_base_data(
         df_base[col_conc_1] = 0.0
     if col_conc_2 not in df_base.columns:
         df_base[col_conc_2] = 0.0
+
+    # =========================================================
+    # CONCORRÊNCIA (coleta): preenche col_conc_1 / col_conc_2
+    # =========================================================
+    try:
+        df_comp = _load_competitor_prices(engine, ref_month_start)
+        if df_comp is not None and not df_comp.empty:
+            df_base = df_base.merge(df_comp, on="SKU", how="left", suffixes=("", "__coleta"))
+
+            for c in (col_conc_1, col_conc_2):
+                c_new = f"{c}__coleta"
+                if c_new in df_base.columns:
+                    s_new = pd.to_numeric(df_base[c_new], errors="coerce")
+                    s_old = pd.to_numeric(df_base[c], errors="coerce")
+                    # prioridade: preço do coleta quando > 0
+                    df_base[c] = np.where(s_new.notna() & (s_new > 0), s_new, s_old).astype(float)
+                    df_base.drop(columns=[c_new], inplace=True, errors="ignore")
+
+            df_base[col_conc_1] = pd.to_numeric(df_base[col_conc_1], errors="coerce").fillna(0.0)
+            df_base[col_conc_2] = pd.to_numeric(df_base[col_conc_2], errors="coerce").fillna(0.0)
+    except Exception:
+        logger.exception("Falha ao aplicar concorrência do schema coleta (continua com 0.0).")
 
     # =========================================================
     # TRIMESTRE / 6M / ANO: usa LEGACY por padrão (compat)
