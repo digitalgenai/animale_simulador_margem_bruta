@@ -408,8 +408,14 @@ def _map_concorrente_to_target_col(nome_conc: str) -> Optional[str]:
 def _load_competitor_prices(engine: Engine, ref_month_start: Optional[pd.Timestamp]) -> pd.DataFrame:
     """
     Busca preços de concorrentes no schema coleta, relacionando:
-      missao (concorrente_id) + missao_produto (produto_id + preço) + (produto -> SKU)
+      missoes (concorrenteId) + missao_produtos (produtoId + preço) + (produtos -> codigo)
     Retorna DF wide: [SKU, col_conc_1, col_conc_2]
+
+    Estrutura real do banco (coleta):
+      - coleta.missoes: id, "criadaEm", "concorrenteId", ...
+      - coleta.concorrentes: id, nome, ...
+      - coleta.missao_produtos: id, "missaoId", "produtoId", "precoConcorrente", "precoConcorrentePromocao", codigo, ...
+      - coleta.produtos: id, codigo, ...
     """
     schema = PGSCHEMA_COLETA_DEFAULT
 
@@ -419,39 +425,39 @@ def _load_competitor_prices(engine: Engine, ref_month_start: Optional[pd.Timesta
             engine,
             schema,
             [
-                COLETA_TABLE_MISSAO_DEFAULT,
-                "missao",
+                COLETA_TABLE_MISSAO_DEFAULT,   # default (já vem correto: "missoes")
                 "missoes",
+                "missao",
             ],
         )
         mp_tbl = _resolve_table(
             engine,
             schema,
             [
-                COLETA_TABLE_MISSAO_PRODUTO_DEFAULT,
+                COLETA_TABLE_MISSAO_PRODUTO_DEFAULT,  # default: "missao_produtos"
+                "missao_produtos",
                 "missao_produto",
+                "missaoprodutos",
                 "missaoproduto",
                 "missaoProduto",
-                "missao_produtos",
-                "missaoprodutos",
             ],
         )
         conc_tbl = _resolve_table(
             engine,
             schema,
             [
-                COLETA_TABLE_CONCORRENTE_DEFAULT,
-                "concorrente",
+                COLETA_TABLE_CONCORRENTE_DEFAULT,  # default: "concorrentes"
                 "concorrentes",
+                "concorrente",
             ],
         )
         prod_tbl = _resolve_table(
             engine,
             schema,
             [
-                COLETA_TABLE_PRODUTO_DEFAULT,
-                "produto",
+                COLETA_TABLE_PRODUTO_DEFAULT,  # default: "produtos"
                 "produtos",
+                "produto",
             ],
         )
 
@@ -469,79 +475,54 @@ def _load_competitor_prices(engine: Engine, ref_month_start: Optional[pd.Timesta
         c_cols = _get_coleta_cols_lower(engine, schema, conc_tbl)
         p_cols = _get_coleta_cols_lower(engine, schema, prod_tbl) if prod_tbl else {}
 
-        # Colunas/joins
-        m_id = _pick_col(m_cols, ["id", "missao_id"])
-        m_conc_id = _pick_col(m_cols, ["concorrente_id", "id_concorrente", "concorrenteid"])
+        # Colunas/joins (com suporte a camelCase)
+        m_id = _pick_col(m_cols, ["id", "missao_id", "missaoid"])
+        m_conc_id = _pick_col(m_cols, ["concorrenteId", "concorrente_id", "id_concorrente", "concorrenteid"])
 
-        c_id = _pick_col(c_cols, ["id", "concorrente_id"])
+        c_id = _pick_col(c_cols, ["id", "concorrente_id", "concorrenteid"])
         c_nome = _pick_col(c_cols, ["nome", "name", "descricao", "razao_social"])
 
-        mp_missao_id = _pick_col(mp_cols, ["missao_id", "id_missao", "missaoid"])
-        mp_produto_id = _pick_col(mp_cols, ["produto_id", "id_produto", "produtoid"])
-        mp_preco = _pick_col(
+        mp_missao_id = _pick_col(mp_cols, ["missaoId", "missao_id", "id_missao", "missaoid"])
+        mp_produto_id = _pick_col(mp_cols, ["produtoId", "produto_id", "id_produto", "produtoid"])
+        mp_preco = _pick_col(mp_cols, ["precoConcorrente", "preco_concorrente", "precoconcorrente"])
+        mp_preco_promo = _pick_col(
             mp_cols,
             [
-                "preco",
-                "preco_coletado",
-                "preco_venda",
-                "preco_atual",
-                "preco_praticado",
-                "valor",
-                "price",
+                "precoConcorrentePromocao",
+                "preco_concorrente_promocao",
+                "precoconcorrentepromocao",
             ],
         )
-        mp_id = _pick_col(mp_cols, ["id", "missao_produto_id", "missaoproduto_id"])
+        mp_id = _pick_col(mp_cols, ["id", "missao_produto_id", "missaoproduto_id", "missaoprodutos_id"])
 
-        if not (m_id and m_conc_id and c_id and c_nome and mp_missao_id and mp_preco):
+        if not (m_id and m_conc_id and c_id and c_nome and mp_missao_id and (mp_preco or mp_preco_promo)):
             logger.warning(
                 "Concorrência (coleta): colunas essenciais não encontradas. "
-                "m_id=%s m_conc_id=%s c_id=%s c_nome=%s mp_missao_id=%s mp_preco=%s",
+                "m_id=%s m_conc_id=%s c_id=%s c_nome=%s mp_missao_id=%s mp_preco=%s mp_preco_promo=%s",
                 m_id,
                 m_conc_id,
                 c_id,
                 c_nome,
                 mp_missao_id,
                 mp_preco,
+                mp_preco_promo,
             )
             return pd.DataFrame()
 
         # Como obter SKU:
-        # 1) Preferencial: join com tabela produto (id -> sku/cod_produto)
-        p_id = _pick_col(p_cols, ["id", "produto_id"]) if p_cols else None
-        p_sku = _pick_col(
-            p_cols,
-            [
-                "sku",
-                "cod_produto",
-                "codigo",
-                "codigo_produto",
-                "codproduto",
-                "cod_prod",
-                "produto_codigo",
-                "codigo_interno",
-                "id_externo",
-            ],
-        ) if p_cols else None
+        # 1) Preferencial: join com tabela produtos (id -> codigo)
+        p_id = _pick_col(p_cols, ["id", "produto_id", "produtoid"]) if p_cols else None
+        p_sku = _pick_col(p_cols, ["codigo", "sku", "cod_produto", "codigo_produto"]) if p_cols else None
 
-        # 2) Fallback: SKU direto em missao_produto
-        mp_sku = _pick_col(
-            mp_cols,
-            [
-                "sku",
-                "cod_produto",
-                "codigo_produto",
-                "codigo",
-                "codproduto",
-                "cod_prod",
-            ],
-        )
+        # 2) Fallback: SKU direto em missao_produtos (coluna "codigo")
+        mp_sku = _pick_col(mp_cols, ["codigo", "sku", "cod_produto", "codigo_produto"])
 
         use_prod_join = bool(prod_tbl and p_id and p_sku and mp_produto_id)
 
         if not use_prod_join and not mp_sku:
             logger.warning(
                 "Concorrência (coleta): não consegui inferir SKU. "
-                "Sem join produto (prod_tbl=%s p_id=%s p_sku=%s mp_produto_id=%s) e sem SKU no missao_produto.",
+                "Sem join produto (prod_tbl=%s p_id=%s p_sku=%s mp_produto_id=%s) e sem SKU no missao_produtos.",
                 prod_tbl,
                 p_id,
                 p_sku,
@@ -550,9 +531,11 @@ def _load_competitor_prices(engine: Engine, ref_month_start: Optional[pd.Timesta
             return pd.DataFrame()
 
         # Coluna de data (para pegar o "mais recente" e/ou filtrar por mês)
+        # No banco: "criadaEm" em missoes; fallback para createdAt/updatedAt.
         m_dt = _pick_col(
             m_cols,
             [
+                "criadaEm",
                 "data",
                 "data_missao",
                 "data_execucao",
@@ -560,6 +543,8 @@ def _load_competitor_prices(engine: Engine, ref_month_start: Optional[pd.Timesta
                 "dt",
                 "dt_execucao",
                 "dt_coleta",
+                "createdAt",
+                "updatedAt",
                 "created_at",
                 "updated_at",
             ],
@@ -575,16 +560,34 @@ def _load_competitor_prices(engine: Engine, ref_month_start: Optional[pd.Timesta
         mp_q = _qual(schema, mp_tbl)
         prod_q = _qual(schema, prod_tbl) if prod_tbl else ""
 
-        sku_expr = f"{p_alias}.{_quote_ident(p_sku)}" if use_prod_join else f"{mp_alias}.{_quote_ident(mp_sku)}"
+        # SKU expr: sempre tenta produtos.codigo quando disponível; fallback para mp.codigo
+        if use_prod_join:
+            sku_expr = f"COALESCE({p_alias}.{_quote_ident(p_sku)}::text, {mp_alias}.{_quote_ident(mp_sku)}::text)"
+        else:
+            sku_expr = f"{mp_alias}.{_quote_ident(mp_sku)}::text"
+
         conc_expr = f"{c_alias}.{_quote_ident(c_nome)}"
-        preco_expr = f"{mp_alias}.{_quote_ident(mp_preco)}"
+
+        # Preço: prioriza promo quando > 0, senão preço normal.
+        # Obs: usamos NULLIF(...,0) para tratar zeros como "sem preço".
+        if mp_preco_promo and mp_preco:
+            promo_expr = f"{mp_alias}.{_quote_ident(mp_preco_promo)}"
+            base_expr = f"{mp_alias}.{_quote_ident(mp_preco)}"
+            preco_expr = f"COALESCE(NULLIF({promo_expr}, 0), NULLIF({base_expr}, 0))"
+        elif mp_preco_promo:
+            promo_expr = f"{mp_alias}.{_quote_ident(mp_preco_promo)}"
+            preco_expr = f"NULLIF({promo_expr}, 0)"
+        else:
+            base_expr = f"{mp_alias}.{_quote_ident(mp_preco)}"
+            preco_expr = f"NULLIF({base_expr}, 0)"
 
         dt_expr = f"{m_alias}.{_quote_ident(m_dt)}" if m_dt else "NULL"
 
+        # LEFT JOIN com produtos para não perder linhas se o produto não existir (fallback SKU = mp.codigo)
         join_prod_sql = ""
         if use_prod_join:
             join_prod_sql = (
-                f"\n        JOIN {prod_q} {p_alias} ON {p_alias}.{_quote_ident(p_id)} = {mp_alias}.{_quote_ident(mp_produto_id)}"
+                f"\n        LEFT JOIN {prod_q} {p_alias} ON {p_alias}.{_quote_ident(p_id)} = {mp_alias}.{_quote_ident(mp_produto_id)}"
             )
 
         # ORDER BY para DISTINCT ON
@@ -713,7 +716,7 @@ def load_base_data(
 
     Importante (pedido):
       - schema 'stage' => somente obt_faturamento (faturamento)
-      - schema 'coleta' => concorrentes (preços) via missao/concorrente/missao_produto
+      - schema 'coleta' => concorrentes (preços) via missoes/concorrentes/missao_produtos
     """
     schema = schema or PGSCHEMA_DEFAULT
     table = table or PGTABLE_DEFAULT

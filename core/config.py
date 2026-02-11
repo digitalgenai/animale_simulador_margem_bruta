@@ -22,10 +22,10 @@ PGTABLE_DEFAULT = os.getenv("PGTABLE", "obt_faturamento")
 
 # --- Coleta (concorrentes) ---
 PGSCHEMA_COLETA_DEFAULT = os.getenv("PGSCHEMA_COLETA", "coleta")
-COLETA_TABLE_MISSAO_DEFAULT = os.getenv("COLETA_TABLE_MISSAO", "missao")
-COLETA_TABLE_MISSAO_PRODUTO_DEFAULT = os.getenv("COLETA_TABLE_MISSAO_PRODUTO", "missao_produto")
-COLETA_TABLE_CONCORRENTE_DEFAULT = os.getenv("COLETA_TABLE_CONCORRENTE", "concorrente")
-COLETA_TABLE_PRODUTO_DEFAULT = os.getenv("COLETA_TABLE_PRODUTO", "produto")
+COLETA_TABLE_MISSAO_DEFAULT = os.getenv("COLETA_TABLE_MISSAO", "missoes")
+COLETA_TABLE_MISSAO_PRODUTO_DEFAULT = os.getenv("COLETA_TABLE_MISSAO_PRODUTO", "missao_produtos")
+COLETA_TABLE_CONCORRENTE_DEFAULT = os.getenv("COLETA_TABLE_CONCORRENTE", "concorrentes")
+COLETA_TABLE_PRODUTO_DEFAULT = os.getenv("COLETA_TABLE_PRODUTO", "produtos")
 
 # Janela móvel em meses (evita depender do len(LISTA_MESES_ANO))
 N_MESES_JANELA = int(os.getenv("N_MESES_JANELA", "12"))
