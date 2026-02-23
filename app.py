@@ -1,3 +1,5 @@
+import tempfile
+from pathlib import Path
 from __future__ import annotations
 
 import io
@@ -285,6 +287,29 @@ app = Dash(
     suppress_callback_exceptions=True,
     title="Simulador v76.8 - Web",
 )
+app.index_string = """
+<!DOCTYPE html>
+<html lang="pt-BR">
+    <head>
+        {%metas%}
+        <meta charset="utf-8" />
+        <meta http-equiv="Content-Language" content="pt-BR" />
+        <meta name="language" content="pt-BR" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>{%title%}</title>
+        {%favicon%}
+        {%css%}
+    </head>
+    <body>
+        {%app_entry%}
+        <footer>
+            {%config%}
+            {%scripts%}
+            {%renderer%}
+        </footer>
+    </body>
+</html>
+"""
 server = app.server
 
 store_sim_default = {"manual": {}, "conc": {}}
@@ -1153,47 +1178,55 @@ def update_mkt_estimate(delta, selected, rowData):
     prevent_initial_call=True,
 )
 def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_store):
-    df_base, _, _, _, _, _, _ = _get_data_for_mes_ref(mes_ref)
-    if df_base is None or df_base.empty:
+    try:
+        df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(mes_ref)
+        if df_base is None or df_base.empty:
+            return no_update
+
+        if active_tab in ("tab-1", "tab-2"):
+            df_view = _filter_tab12(df_base, forn, fab, cat)
+            nome_tipo = "FINANCEIRO" if active_tab == "tab-1" else "MERCADO"
+        else:
+            df_view = _filter_tab3(df_base, cat_t3, forn_t3)
+            nome_tipo = "CATEGORIA"
+
+        if df_view is None or df_view.empty:
+            return no_update
+
+        df_out = df_view.copy()
+
+        for c in ["Sim_Manual_Ativa", "Sim_Preco_Manual", "Sim_Margem_Manual", "Sim_Conc_Ativa", "Sim_Conc_Delta"]:
+            if c not in df_out.columns:
+                df_out[c] = False if c.endswith("_Ativa") else 0.0
+
+        manual = (sim_store or {}).get("manual", {})
+        conc = (sim_store or {}).get("conc", {})
+
+        for produto_key, state in (manual or {}).items():
+            if produto_key in df_out.index and isinstance(state, dict) and state.get("ativa"):
+                df_out.at[produto_key, "Sim_Manual_Ativa"] = True
+                df_out.at[produto_key, "Sim_Preco_Manual"] = float(state.get("preco", 0.0))
+                df_out.at[produto_key, "Sim_Margem_Manual"] = float(state.get("margem", 0.0))
+
+        for produto_key, state in (conc or {}).items():
+            if produto_key in df_out.index and isinstance(state, dict) and state.get("ativa"):
+                df_out.at[produto_key, "Sim_Conc_Ativa"] = True
+                df_out.at[produto_key, "Sim_Conc_Delta"] = float(state.get("delta", 0.0))
+
+        mes_safe = (month_ctx or {}).get("ref_month_safe") or "MES"
+        filename = f"Simulacao_{nome_tipo}_{mes_safe}.xlsx"
+
+        tmpdir = Path(tempfile.gettempdir())
+        tmp_path = tmpdir / f"dash_export_{nome_tipo}_{mes_safe}.xlsx"
+
+        with pd.ExcelWriter(tmp_path, engine="openpyxl") as writer:
+            df_out.to_excel(writer, index=True)
+
+        return dcc.send_file(str(tmp_path), filename=filename)
+
+    except Exception:
+        logger.exception("Falha no export_excel()")
         return no_update
-
-    if active_tab in ("tab-1", "tab-2"):
-        df_view = _filter_tab12(df_base, forn, fab, cat)
-        nome_tipo = "FINANCEIRO" if active_tab == "tab-1" else "MERCADO"
-    else:
-        df_view = _filter_tab3(df_base, cat_t3, forn_t3)
-        nome_tipo = "CATEGORIA"
-
-    if df_view is None or df_view.empty:
-        return no_update
-
-    df_out = df_view.copy()
-
-    for c in ["Sim_Manual_Ativa", "Sim_Preco_Manual", "Sim_Margem_Manual", "Sim_Conc_Ativa", "Sim_Conc_Delta"]:
-        if c not in df_out.columns:
-            df_out[c] = False if c.endswith("_Ativa") else 0.0
-
-    manual = (sim_store or {}).get("manual", {})
-    conc = (sim_store or {}).get("conc", {})
-
-    for produto_key, state in manual.items():
-        if produto_key in df_out.index and isinstance(state, dict) and state.get("ativa"):
-            df_out.at[produto_key, "Sim_Manual_Ativa"] = True
-            df_out.at[produto_key, "Sim_Preco_Manual"] = float(state.get("preco", 0.0))
-            df_out.at[produto_key, "Sim_Margem_Manual"] = float(state.get("margem", 0.0))
-
-    for produto_key, state in conc.items():
-        if produto_key in df_out.index and isinstance(state, dict) and state.get("ativa"):
-            df_out.at[produto_key, "Sim_Conc_Ativa"] = True
-            df_out.at[produto_key, "Sim_Conc_Delta"] = float(state.get("delta", 0.0))
-
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df_out.to_excel(writer, index=True)
-    output.seek(0)
-
-    filename = f"Simulacao_{nome_tipo}.xlsx"
-    return dcc.send_bytes(output.getvalue(), filename)
 
 
 if __name__ == "__main__":

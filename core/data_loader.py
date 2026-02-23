@@ -1037,20 +1037,21 @@ def load_base_data(
     df_base["Marg_Val_Ref"] = df_base[marg_ref]
 
     # Históricos
-    qtd_cols_ano = [f"Qtd_{m}" for m in labels_legacy]
-    qtd_cols_6m = [f"Qtd_{m}" for m in labels_legacy[-6:]]
-    qtd_cols_3m = [f"Qtd_{m}" for m in labels_legacy[-3:]]
+    qtd_cols_ano_safe = [f"Qtd_{m}" for m in labels_safe]
+    qtd_cols_6m_safe = [f"Qtd_{m}" for m in labels_safe[-6:]]
+    qtd_cols_3m_safe = [f"Qtd_{m}" for m in labels_safe[-3:]]
 
-    _ensure_columns(df_base, qtd_cols_ano, 0.0)
-    _ensure_columns(df_base, qtd_cols_6m, 0.0)
-    _ensure_columns(df_base, qtd_cols_3m, 0.0)
+    _ensure_columns(df_base, qtd_cols_ano_safe, 0.0)
+    _ensure_columns(df_base, qtd_cols_6m_safe, 0.0)
+    _ensure_columns(df_base, qtd_cols_3m_safe, 0.0)
 
-    df_base["Hist_Qtd_Media_6M"] = df_base[qtd_cols_6m].mean(axis=1)
-    df_base["Hist_Qtd_Media_3M"] = df_base[qtd_cols_3m].mean(axis=1)
+    df_base["Hist_Qtd_Media_6M"] = df_base[qtd_cols_6m_safe].mean(axis=1)
+    df_base["Hist_Qtd_Media_3M"] = df_base[qtd_cols_3m_safe].mean(axis=1)
+    df_base["Hist_Qtd_Pico"] = df_base[qtd_cols_ano_safe].max(axis=1)
 
-    df_base["Hist_Qtd_Pico"] = df_base[qtd_cols_ano].max(axis=1)
-    pico_col = df_base[qtd_cols_ano].idxmax(axis=1).astype(str)
-    df_base["Hist_Mes_Pico"] = pico_col.str.replace("Qtd_", "", regex=False)
+    pico_col_safe = df_base[qtd_cols_ano_safe].idxmax(axis=1).astype(str)
+    pico_safe = pico_col_safe.str.replace("Qtd_", "", regex=False)
+    df_base["Hist_Mes_Pico"] = pico_safe.map(lambda s: safe_to_legacy.get(str(s), str(s)))
 
     # Benchmarks globais
     logger.info("Calculando Benchmarks Globais...")
