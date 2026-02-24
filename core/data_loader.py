@@ -461,6 +461,8 @@ def _load_competitor_prices(engine: Engine, ref_month_start: Optional[pd.Timesta
             ],
         )
 
+        logger.info("coleta tables resolved: missao=%s mp=%s conc=%s prod=%s", missao_tbl, mp_tbl, conc_tbl, prod_tbl)
+
         if not missao_tbl or not mp_tbl or not conc_tbl:
             logger.warning(
                 "Concorrência (coleta) indisponível: tabelas essenciais não encontradas. missao=%s mp=%s conc=%s",
@@ -635,6 +637,11 @@ def _load_competitor_prices(engine: Engine, ref_month_start: Optional[pd.Timesta
             except Exception:
                 logger.exception("Falha ao consultar concorrência em %s (use_month_filter=%s).", schema, use_month_filter)
                 return pd.DataFrame()
+        
+        logger.info("df_raw rows=%d cols=%s", len(df_raw), list(df_raw.columns))
+        if not df_raw.empty:
+            logger.info("concorrentes sample=%s", df_raw["Concorrente"].dropna().astype(str).head(10).tolist())
+            logger.info("sku sample=%s", df_raw["SKU"].dropna().astype(str).head(10).tolist())
 
         # 1) tenta filtrar pelo mês selecionado (se existir data)
         df_raw = _query(use_month_filter=True)
@@ -681,6 +688,8 @@ def _load_competitor_prices(engine: Engine, ref_month_start: Optional[pd.Timesta
 
         df_wide[col_conc_1] = pd.to_numeric(df_wide[col_conc_1], errors="coerce").fillna(0.0)
         df_wide[col_conc_2] = pd.to_numeric(df_wide[col_conc_2], errors="coerce").fillna(0.0)
+
+        logger.info("df_raw after map/filter rows=%d", len(df_raw))
 
         return df_wide[["SKU", col_conc_1, col_conc_2]]
 

@@ -914,7 +914,37 @@ def on_cell_click(cell1, cell2, rowData1, rowData2, mes_ref, forn, fab, cat, act
 
     trig = ctx.triggered_id
     if trig in ("mes_ref", "forn", "fab", "cat", "tabs"):
-        return _history_component(hist_default, "t1", month_ctx).children, _history_component(hist_default, "t2", month_ctx).children
+        # auto-seleciona 1ª linha da aba ativa para deixar intuitivo
+        base_row = None
+        if active_tab == "tab-1" and rowData1:
+            base_row = rowData1[0]
+        elif active_tab == "tab-2" and rowData2:
+            base_row = rowData2[0]
+
+        if base_row:
+            produto_key = base_row.get("_produto_key") or base_row.get("id")
+            if produto_key and produto_key in df_base.index:
+                row = df_base.loc[produto_key]
+                hist = build_history_payload(row)
+                # atualiza os dois painéis para manter consistência
+                return (
+                    _history_component(hist, "t1", month_ctx).children,
+                    _history_component(hist, "t2", month_ctx).children,
+                )
+
+        # fallback se não tiver rowData ainda
+        return (
+            _history_component(
+                {"produto": "Clique em um produto na tabela", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"},
+                "t1",
+                month_ctx,
+            ).children,
+            _history_component(
+                {"produto": "Clique em um produto na tabela", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"},
+                "t2",
+                month_ctx,
+            ).children,
+        )
 
     df_base, _, _, _, _, _, _ = _get_data_for_mes_ref(mes_ref)
     if df_base is None or df_base.empty:
