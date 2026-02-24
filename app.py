@@ -47,10 +47,13 @@ def _parse_ym_safe(s: str | None) -> Tuple[int | None, int | None]:
     return int(m.group(1)), int(m.group(2))
 
 
-def _get_data_for_mes_ref(mes_ref_safe: str | None):
+def _get_data_for_mes_ref(mes_ref_safe: str | None, force_reload: bool = False):
     key = str(mes_ref_safe) if mes_ref_safe else "__DEFAULT__"
 
     with _DATA_LOCK:
+        if force_reload:
+            _DATA_CACHE.pop(key, None)
+
         if key in _DATA_CACHE:
             return _DATA_CACHE[key]
 
@@ -400,6 +403,8 @@ def make_grid(grid_id: str, column_defs: List[Dict[str, Any]]) -> dag.AgGrid:
         },
         dashGridOptions={
             "rowSelection": "single",
+            "suppressRowClickSelection": False,
+            "rowMultiSelectWithClick": False,
             "animateRows": True,
             **_apply_row_class_rules(),
         },
@@ -499,7 +504,7 @@ app.layout = dbc.Container(
                                     ),
                                     html.Span("  |  ", style={"color": "#999", "marginLeft": "10px"}),
 
-                                    html.Span("Meta Fin. (%): ", style={"fontSize": "12px", "color": "navy"}),
+                                    html.Span("Sim. Marg (%): ", style={"fontSize": "12px", "color": "navy"}),
                                     dcc.Input(
                                         id="meta_t1",
                                         value="30.0",
@@ -507,7 +512,7 @@ app.layout = dbc.Container(
                                         style={"width": "70px", "textAlign": "right", "marginRight": "8px"},
                                     ),
 
-                                    html.Span("Delta Padrão (%): ", style={"fontSize": "12px", "color": "#b75402"}),
+                                    html.Span("Delta Alvo (%): ", style={"fontSize": "12px", "color": "#b75402"}),
                                     dcc.Input(
                                         id="meta_t2",
                                         value="0.0",
@@ -832,7 +837,8 @@ def on_cat_t3_change(mes_ref, cat_t3):
     Input("store-sim", "data"),
 )
 def refresh_all(_, active_tab, mes_ref, forn, fab, cat, meta_t1, meta_t2, cat_t3, forn_t3, sim_store):
-    df_base, bench_ano, _, _, _, _, month_ctx = _get_data_for_mes_ref(mes_ref)
+    force = (ctx.triggered_id == "btn-refresh")
+    df_base, bench_ano, _, _, _, _, month_ctx = _get_data_for_mes_ref(mes_ref, force_reload=force)
 
     meta_t1_atual = _safe_float_percent(meta_t1, 0.30)
     meta_t2_atual = _safe_float_percent(meta_t2, 0.00)
@@ -899,6 +905,8 @@ def fit_columns_on_visible_tab(active_tab):
     Output("hist-box-t2", "children"),
     Input("grid-t1", "cellClicked"),
     Input("grid-t2", "cellClicked"),
+    Input("grid-t1", "selectedRows"),
+    Input("grid-t2", "selectedRows"),
     State("grid-t1", "rowData"),
     State("grid-t2", "rowData"),
     Input("mes_ref", "value"),
@@ -907,12 +915,29 @@ def fit_columns_on_visible_tab(active_tab):
     Input("cat", "value"),
     Input("tabs", "active_tab"),
 )
-def on_cell_click(cell1, cell2, rowData1, rowData2, mes_ref, forn, fab, cat, active_tab):
+def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, fab, cat, active_tab):
     hist_default = {"produto": "Selecione...", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"}
 
     df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(mes_ref)
 
     trig = ctx.triggered_id
+
+    if trig == "grid-t2" and active_tab == "tab-2" and isinstance(sel2, list) and len(sel2) > 0:
+        r = sel2[0]
+        produto_key = r.get("_produto_key") or r.get("id")
+        if produto_key and produto_key in df_base.index:
+            row = df_base.loc[produto_key]
+            hist = build_history_payload(row)
+            return no_update, _history_component(hist, "t2", month_ctx).children
+
+    if trig == "grid-t1" and active_tab == "tab-1" and isinstance(sel1, list) and len(sel1) > 0:
+        r = sel1[0]
+        produto_key = r.get("_produto_key") or r.get("id")
+        if produto_key and produto_key in df_base.index:
+            row = df_base.loc[produto_key]
+            hist = build_history_payload(row)
+            return _history_component(hist, "t1", month_ctx).children, no_update
+        
     if trig in ("mes_ref", "forn", "fab", "cat", "tabs"):
         # auto-seleciona 1ª linha da aba ativa para deixar intuitivo
         base_row = None
@@ -946,7 +971,6 @@ def on_cell_click(cell1, cell2, rowData1, rowData2, mes_ref, forn, fab, cat, act
             ).children,
         )
 
-    df_base, _, _, _, _, _, _ = _get_data_for_mes_ref(mes_ref)
     if df_base is None or df_base.empty:
         return _history_component(hist_default, "t1").children, _history_component(hist_default, "t2").children
 
