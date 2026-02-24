@@ -280,6 +280,33 @@ def _closed_month_label(month_ctx: Dict[str, Any] | None) -> str:
     return "Mês"
 
 
+def _visible_fields_from_column_state(column_state):
+    """
+    Retorna lista de fields/colId visíveis no grid (hide != True).
+    """
+    if not isinstance(column_state, list) or not column_state:
+        return []
+
+    out = []
+    for c in column_state:
+        if not isinstance(c, dict):
+            continue
+        if c.get("hide") is True:
+            continue
+        # dash-ag-grid costuma usar colId; em muitos casos é igual ao field
+        fid = c.get("colId") or c.get("field")
+        if fid:
+            out.append(str(fid))
+    # remove duplicados preservando ordem
+    seen = set()
+    final = []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            final.append(x)
+    return final
+
+
 # ---------- Dash app ----------
 app = Dash(
     __name__,
@@ -1175,29 +1202,70 @@ def update_mkt_estimate(delta, selected, rowData):
     State("cat_t3", "value"),
     State("forn_t3", "value"),
     State("store-sim", "data"),
+    State("grid-t1", "columnState"),
+    State("grid-t2", "columnState"),
+    State("grid-t3", "columnState"),
+    State("grid-t1", "rowData"),
+    State("grid-t2", "rowData"),
+    State("grid-t3", "rowData"),
     prevent_initial_call=True,
 )
-def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_store):
+def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_store, cs_t1, cs_t2, cs_t3, rd_t1, rd_t2, rd_t3):
     try:
         df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(mes_ref)
         if df_base is None or df_base.empty:
             return no_update
 
-        if active_tab in ("tab-1", "tab-2"):
-            df_view = _filter_tab12(df_base, forn, fab, cat)
-            nome_tipo = "FINANCEIRO" if active_tab == "tab-1" else "MERCADO"
+        # --- descobre colunas visíveis e rows da aba ---
+        if active_tab == "tab-1":
+            visible = _visible_fields_from_column_state(cs_t1)
+            rows = rd_t1 or []
+            nome_tipo = "FINANCEIRO"
+        elif active_tab == "tab-2":
+            visible = _visible_fields_from_column_state(cs_t2)
+            rows = rd_t2 or []
+            nome_tipo = "MERCADO"
         else:
-            df_view = _filter_tab3(df_base, cat_t3, forn_t3)
+            visible = _visible_fields_from_column_state(cs_t3)
+            rows = rd_t3 or []
             nome_tipo = "CATEGORIA"
 
-        if df_view is None or df_view.empty:
+        if not rows:
             return no_update
 
-        df_out = df_view.copy()
+        if not visible:
+            if active_tab == "tab-1":
+                visible = [c["field"] for c in coldefs_t1 if c.get("field")]
+            elif active_tab == "tab-2":
+                visible = [c["field"] for c in coldefs_t2 if c.get("field")]
+            else:
+                visible = [c["field"] for c in coldefs_t3 if c.get("field")]
 
-        for c in ["Sim_Manual_Ativa", "Sim_Preco_Manual", "Sim_Margem_Manual", "Sim_Conc_Ativa", "Sim_Conc_Delta"]:
-            if c not in df_out.columns:
-                df_out[c] = False if c.endswith("_Ativa") else 0.0
+        df_out = pd.DataFrame(rows)
+
+        # remove colunas internas do rowData
+        drop_tech = [c for c in df_out.columns if str(c).startswith("_") or str(c).startswith("__")]
+        df_out.drop(columns=drop_tech, inplace=True, errors="ignore")
+
+        # aplica somente colunas visíveis
+        keep = [c for c in visible if c in df_out.columns]
+        if keep:
+            df_out = df_out[keep]
+
+        if active_tab == "tab-1":
+            visible = _visible_fields_from_column_state(cs_t1)
+        elif active_tab == "tab-2":
+            visible = _visible_fields_from_column_state(cs_t2)
+        else:
+            visible = _visible_fields_from_column_state(cs_t3)
+
+        if not visible:
+            if active_tab == "tab-1":
+                visible = [c["field"] for c in coldefs_t1 if c.get("field")]
+            elif active_tab == "tab-2":
+                visible = [c["field"] for c in coldefs_t2 if c.get("field")]
+            else:
+                visible = [c["field"] for c in coldefs_t3 if c.get("field")]
 
         manual = (sim_store or {}).get("manual", {})
         conc = (sim_store or {}).get("conc", {})
@@ -1220,7 +1288,7 @@ def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_st
         tmp_path = tmpdir / f"dash_export_{nome_tipo}_{mes_safe}.xlsx"
 
         with pd.ExcelWriter(tmp_path, engine="openpyxl") as writer:
-            df_out.to_excel(writer, index=True)
+            df_out.to_excel(writer, index=False)
 
         return dcc.send_file(str(tmp_path), filename=filename)
 
