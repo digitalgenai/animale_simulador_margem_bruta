@@ -1,7 +1,7 @@
-import tempfile
-from pathlib import Path
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
 import io
 import logging
 import re
@@ -47,10 +47,13 @@ def _parse_ym_safe(s: str | None) -> Tuple[int | None, int | None]:
     return int(m.group(1)), int(m.group(2))
 
 
-def _get_data_for_mes_ref(mes_ref_safe: str | None):
+def _get_data_for_mes_ref(mes_ref_safe: str | None, force_reload: bool = False):
     key = str(mes_ref_safe) if mes_ref_safe else "__DEFAULT__"
 
     with _DATA_LOCK:
+        if force_reload:
+            _DATA_CACHE.pop(key, None)
+
         if key in _DATA_CACHE:
             return _DATA_CACHE[key]
 
@@ -280,6 +283,33 @@ def _closed_month_label(month_ctx: Dict[str, Any] | None) -> str:
     return "Mês"
 
 
+def _visible_fields_from_column_state(column_state):
+    """
+    Retorna lista de fields/colId visíveis no grid (hide != True).
+    """
+    if not isinstance(column_state, list) or not column_state:
+        return []
+
+    out = []
+    for c in column_state:
+        if not isinstance(c, dict):
+            continue
+        if c.get("hide") is True:
+            continue
+        # dash-ag-grid costuma usar colId; em muitos casos é igual ao field
+        fid = c.get("colId") or c.get("field")
+        if fid:
+            out.append(str(fid))
+    # remove duplicados preservando ordem
+    seen = set()
+    final = []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            final.append(x)
+    return final
+
+
 # ---------- Dash app ----------
 app = Dash(
     __name__,
@@ -373,6 +403,8 @@ def make_grid(grid_id: str, column_defs: List[Dict[str, Any]]) -> dag.AgGrid:
         },
         dashGridOptions={
             "rowSelection": "single",
+            "suppressRowClickSelection": False,
+            "rowMultiSelectWithClick": False,
             "animateRows": True,
             **_apply_row_class_rules(),
         },
@@ -472,7 +504,7 @@ app.layout = dbc.Container(
                                     ),
                                     html.Span("  |  ", style={"color": "#999", "marginLeft": "10px"}),
 
-                                    html.Span("Meta Fin. (%): ", style={"fontSize": "12px", "color": "navy"}),
+                                    html.Span("Sim. Marg (%): ", style={"fontSize": "12px", "color": "navy"}),
                                     dcc.Input(
                                         id="meta_t1",
                                         value="30.0",
@@ -480,7 +512,7 @@ app.layout = dbc.Container(
                                         style={"width": "70px", "textAlign": "right", "marginRight": "8px"},
                                     ),
 
-                                    html.Span("Delta Padrão (%): ", style={"fontSize": "12px", "color": "#b75402"}),
+                                    html.Span("Delta Alvo (%): ", style={"fontSize": "12px", "color": "#b75402"}),
                                     dcc.Input(
                                         id="meta_t2",
                                         value="0.0",
@@ -805,7 +837,8 @@ def on_cat_t3_change(mes_ref, cat_t3):
     Input("store-sim", "data"),
 )
 def refresh_all(_, active_tab, mes_ref, forn, fab, cat, meta_t1, meta_t2, cat_t3, forn_t3, sim_store):
-    df_base, bench_ano, _, _, _, _, month_ctx = _get_data_for_mes_ref(mes_ref)
+    force = (ctx.triggered_id == "btn-refresh")
+    df_base, bench_ano, _, _, _, _, month_ctx = _get_data_for_mes_ref(mes_ref, force_reload=force)
 
     meta_t1_atual = _safe_float_percent(meta_t1, 0.30)
     meta_t2_atual = _safe_float_percent(meta_t2, 0.00)
@@ -872,6 +905,8 @@ def fit_columns_on_visible_tab(active_tab):
     Output("hist-box-t2", "children"),
     Input("grid-t1", "cellClicked"),
     Input("grid-t2", "cellClicked"),
+    Input("grid-t1", "selectedRows"),
+    Input("grid-t2", "selectedRows"),
     State("grid-t1", "rowData"),
     State("grid-t2", "rowData"),
     Input("mes_ref", "value"),
@@ -880,16 +915,62 @@ def fit_columns_on_visible_tab(active_tab):
     Input("cat", "value"),
     Input("tabs", "active_tab"),
 )
-def on_cell_click(cell1, cell2, rowData1, rowData2, mes_ref, forn, fab, cat, active_tab):
+def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, fab, cat, active_tab):
     hist_default = {"produto": "Selecione...", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"}
 
     df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(mes_ref)
 
     trig = ctx.triggered_id
-    if trig in ("mes_ref", "forn", "fab", "cat", "tabs"):
-        return _history_component(hist_default, "t1", month_ctx).children, _history_component(hist_default, "t2", month_ctx).children
 
-    df_base, _, _, _, _, _, _ = _get_data_for_mes_ref(mes_ref)
+    if trig == "grid-t2" and active_tab == "tab-2" and isinstance(sel2, list) and len(sel2) > 0:
+        r = sel2[0]
+        produto_key = r.get("_produto_key") or r.get("id")
+        if produto_key and produto_key in df_base.index:
+            row = df_base.loc[produto_key]
+            hist = build_history_payload(row)
+            return no_update, _history_component(hist, "t2", month_ctx).children
+
+    if trig == "grid-t1" and active_tab == "tab-1" and isinstance(sel1, list) and len(sel1) > 0:
+        r = sel1[0]
+        produto_key = r.get("_produto_key") or r.get("id")
+        if produto_key and produto_key in df_base.index:
+            row = df_base.loc[produto_key]
+            hist = build_history_payload(row)
+            return _history_component(hist, "t1", month_ctx).children, no_update
+        
+    if trig in ("mes_ref", "forn", "fab", "cat", "tabs"):
+        # auto-seleciona 1ª linha da aba ativa para deixar intuitivo
+        base_row = None
+        if active_tab == "tab-1" and rowData1:
+            base_row = rowData1[0]
+        elif active_tab == "tab-2" and rowData2:
+            base_row = rowData2[0]
+
+        if base_row:
+            produto_key = base_row.get("_produto_key") or base_row.get("id")
+            if produto_key and produto_key in df_base.index:
+                row = df_base.loc[produto_key]
+                hist = build_history_payload(row)
+                # atualiza os dois painéis para manter consistência
+                return (
+                    _history_component(hist, "t1", month_ctx).children,
+                    _history_component(hist, "t2", month_ctx).children,
+                )
+
+        # fallback se não tiver rowData ainda
+        return (
+            _history_component(
+                {"produto": "Clique em um produto na tabela", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"},
+                "t1",
+                month_ctx,
+            ).children,
+            _history_component(
+                {"produto": "Clique em um produto na tabela", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"},
+                "t2",
+                month_ctx,
+            ).children,
+        )
+
     if df_base is None or df_base.empty:
         return _history_component(hist_default, "t1").children, _history_component(hist_default, "t2").children
 
@@ -1175,29 +1256,70 @@ def update_mkt_estimate(delta, selected, rowData):
     State("cat_t3", "value"),
     State("forn_t3", "value"),
     State("store-sim", "data"),
+    State("grid-t1", "columnState"),
+    State("grid-t2", "columnState"),
+    State("grid-t3", "columnState"),
+    State("grid-t1", "rowData"),
+    State("grid-t2", "rowData"),
+    State("grid-t3", "rowData"),
     prevent_initial_call=True,
 )
-def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_store):
+def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_store, cs_t1, cs_t2, cs_t3, rd_t1, rd_t2, rd_t3):
     try:
         df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(mes_ref)
         if df_base is None or df_base.empty:
             return no_update
 
-        if active_tab in ("tab-1", "tab-2"):
-            df_view = _filter_tab12(df_base, forn, fab, cat)
-            nome_tipo = "FINANCEIRO" if active_tab == "tab-1" else "MERCADO"
+        # --- descobre colunas visíveis e rows da aba ---
+        if active_tab == "tab-1":
+            visible = _visible_fields_from_column_state(cs_t1)
+            rows = rd_t1 or []
+            nome_tipo = "FINANCEIRO"
+        elif active_tab == "tab-2":
+            visible = _visible_fields_from_column_state(cs_t2)
+            rows = rd_t2 or []
+            nome_tipo = "MERCADO"
         else:
-            df_view = _filter_tab3(df_base, cat_t3, forn_t3)
+            visible = _visible_fields_from_column_state(cs_t3)
+            rows = rd_t3 or []
             nome_tipo = "CATEGORIA"
 
-        if df_view is None or df_view.empty:
+        if not rows:
             return no_update
 
-        df_out = df_view.copy()
+        if not visible:
+            if active_tab == "tab-1":
+                visible = [c["field"] for c in coldefs_t1 if c.get("field")]
+            elif active_tab == "tab-2":
+                visible = [c["field"] for c in coldefs_t2 if c.get("field")]
+            else:
+                visible = [c["field"] for c in coldefs_t3 if c.get("field")]
 
-        for c in ["Sim_Manual_Ativa", "Sim_Preco_Manual", "Sim_Margem_Manual", "Sim_Conc_Ativa", "Sim_Conc_Delta"]:
-            if c not in df_out.columns:
-                df_out[c] = False if c.endswith("_Ativa") else 0.0
+        df_out = pd.DataFrame(rows)
+
+        # remove colunas internas do rowData
+        drop_tech = [c for c in df_out.columns if str(c).startswith("_") or str(c).startswith("__")]
+        df_out.drop(columns=drop_tech, inplace=True, errors="ignore")
+
+        # aplica somente colunas visíveis
+        keep = [c for c in visible if c in df_out.columns]
+        if keep:
+            df_out = df_out[keep]
+
+        if active_tab == "tab-1":
+            visible = _visible_fields_from_column_state(cs_t1)
+        elif active_tab == "tab-2":
+            visible = _visible_fields_from_column_state(cs_t2)
+        else:
+            visible = _visible_fields_from_column_state(cs_t3)
+
+        if not visible:
+            if active_tab == "tab-1":
+                visible = [c["field"] for c in coldefs_t1 if c.get("field")]
+            elif active_tab == "tab-2":
+                visible = [c["field"] for c in coldefs_t2 if c.get("field")]
+            else:
+                visible = [c["field"] for c in coldefs_t3 if c.get("field")]
 
         manual = (sim_store or {}).get("manual", {})
         conc = (sim_store or {}).get("conc", {})
@@ -1220,7 +1342,7 @@ def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_st
         tmp_path = tmpdir / f"dash_export_{nome_tipo}_{mes_safe}.xlsx"
 
         with pd.ExcelWriter(tmp_path, engine="openpyxl") as writer:
-            df_out.to_excel(writer, index=True)
+            df_out.to_excel(writer, index=False)
 
         return dcc.send_file(str(tmp_path), filename=filename)
 
