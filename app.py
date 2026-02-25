@@ -128,7 +128,7 @@ def _filter_tab12(df_base: pd.DataFrame, forn: str, fab: str, cat: str) -> pd.Da
     abc_map = {"A": 0, "B": 1, "C": 2}
     abc_order = df_temp["Curva_ABC"].map(abc_map).fillna(3)
     df_temp = df_temp.assign(ABC_Order=abc_order).sort_values(
-        ["ABC_Order", "Fat_Total_Trimestre"], ascending=[True, False]
+        ["ABC_Order", "Fat_Ref"], ascending=[True, False]
     )
     return df_temp
 
@@ -158,7 +158,7 @@ def _get_supplier_options_for_category(df_base: pd.DataFrame, cat_t3: str) -> Li
     if df_base is None or df_base.empty or not cat_t3:
         return ["[TODOS]"]
     df_cat = df_base[df_base["Area"] == cat_t3]
-    rank_forn_cat = df_cat.groupby("Fornecedor")["Fat_Total_Trimestre"].sum().sort_values(ascending=False)
+    rank_forn_cat = df_cat.groupby("Fornecedor")["Fat_Ref"].sum().sort_values(ascending=False)
     lista_forn_cat = rank_forn_cat.index.tolist()
     lista_forn_cat.insert(0, "[TODOS]")
     return lista_forn_cat

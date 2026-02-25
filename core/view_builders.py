@@ -56,12 +56,9 @@ def compute_summary(df_view_atual: pd.DataFrame, bench_ano: Dict[str, float], mo
             "margem_5m": 0.0,
         }
 
-    fat_total = float(df_view_atual["Fat_Total_Trimestre"].sum())
-    marg_pond = (
-        float((df_view_atual["Fat_Total_Trimestre"] * df_view_atual["Margem_Media_Trimestre"]).sum()) / fat_total
-        if fat_total > 0
-        else 0.0
-    )
+    fat_total = float(df_view_atual.get("Fat_Ref", 0.0).sum())
+    marg_total = float(df_view_atual.get("Marg_Val_Ref", 0.0).sum())
+    marg_pond = (marg_total / fat_total) if fat_total > 0 else 0.0
 
     ctx = month_ctx or get_month_context()
     labels_legacy = ctx.get("labels_legacy") or []
@@ -85,7 +82,7 @@ def compute_summary(df_view_atual: pd.DataFrame, bench_ano: Dict[str, float], mo
     # Breakdown (Top 5 categorias)
     df_bd = (
         df_view_atual.groupby("Area")
-        .agg(Fat=("Fat_Total_Trimestre", "sum"), Marg=("Valor_Margem_Total_Trimestre", "sum"))
+        .agg(Fat=("Fat_Ref", "sum"), Marg=("Marg_Val_Ref", "sum"))
         .sort_values("Fat", ascending=False)
         .head(5)
     )

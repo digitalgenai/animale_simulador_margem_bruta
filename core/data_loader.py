@@ -999,10 +999,6 @@ def load_base_data(
     df_base["Valor_Margem_Total_Trimestre"] = df_base[cols_marg_3m].sum(axis=1)
     df_base["Margem_Media_Trimestre"] = _safe_div(df_base["Valor_Margem_Total_Trimestre"], df_base["Fat_Total_Trimestre"])
 
-    df_base["Curva_ABC"] = _calc_curva_abc(df_base, "Fat_Total_Trimestre")
-    df_base["ABC"] = df_base["Curva_ABC"]
-    df_base["Categ"] = df_base["Area"]
-
     # ======= MÊS REF AGORA = MÊS SELECIONADO (último mês da janela) =======
     mes_ref_safe = labels_safe[-1]
     fat_ref = f"Fat_{mes_ref_safe}"
@@ -1035,6 +1031,10 @@ def load_base_data(
 
     df_base["Fat_Ref"] = df_base[fat_ref]
     df_base["Marg_Val_Ref"] = df_base[marg_ref]
+
+    df_base["Curva_ABC"] = _calc_curva_abc(df_base, "Fat_Ref")
+    df_base["ABC"] = df_base["Curva_ABC"]
+    df_base["Categ"] = df_base["Area"]
 
     # Históricos
     qtd_cols_ano_safe = [f"Qtd_{m}" for m in labels_safe]
@@ -1111,7 +1111,7 @@ def load_base_data(
 
     # Listas globais
     forn_ranking = (
-        df_base.groupby(COLUNA_AGREGACAO_PRINCIPAL)["Fat_Total_Trimestre"]
+        df_base.groupby(COLUNA_AGREGACAO_PRINCIPAL)["Fat_Ref"]
         .sum()
         .sort_values(ascending=False)
     )
