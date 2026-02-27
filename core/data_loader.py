@@ -809,23 +809,13 @@ def load_base_data(
         df_base = pd.DataFrame()
         return df_base, {}, {}, {}, ["SEM DADOS"], []
 
-    # Dimensões por SKU
-    base_dim = (
-        df_win.groupby("cod_produto", as_index=False)
-        .agg(
-            Produto=("produto", "first"),
-            Cod_Barras=("cod_barras", "first"),
-            Fornecedor=("fornecedor", "first"),
-            Fabricante=("fabricante", "first"),
-            Area=("area", "first"),
-        )
-        .rename(columns={"cod_produto": "SKU"})
-    )
+    # chaves dimensionais consistentes (grão correto p/ filtrar Fornecedor/Fabricante/Area)
+    keys = ["cod_produto", "fornecedor", "fabricante", "area", "produto", "cod_barras"]
 
-    # Pivots (SAFE)
-    fat_pvt = df_win.pivot_table(index="cod_produto", columns="mes_label_safe", values="fat", aggfunc="sum").fillna(0.0)
-    marg_pvt = df_win.pivot_table(index="cod_produto", columns="mes_label_safe", values="marg_val", aggfunc="sum").fillna(0.0)
-    qtd_pvt = df_win.pivot_table(index="cod_produto", columns="mes_label_safe", values="qtd", aggfunc="sum").fillna(0.0)
+    # pivota no grão CERTO
+    fat_pvt  = df_win.pivot_table(index=keys, columns="mes_label_safe", values="fat",      aggfunc="sum").fillna(0.0)
+    marg_pvt = df_win.pivot_table(index=keys, columns="mes_label_safe", values="marg_val", aggfunc="sum").fillna(0.0)
+    qtd_pvt  = df_win.pivot_table(index=keys, columns="mes_label_safe", values="qtd",      aggfunc="sum").fillna(0.0)
 
     # garante todas as colunas SAFE na ordem da janela real
     for m in labels_safe:
@@ -836,21 +826,54 @@ def load_base_data(
         if m not in qtd_pvt.columns:
             qtd_pvt[m] = 0.0
 
-    fat_pvt = fat_pvt[labels_safe]
+    fat_pvt  = fat_pvt[labels_safe]
     marg_pvt = marg_pvt[labels_safe]
-    qtd_pvt = qtd_pvt[labels_safe]
+    qtd_pvt  = qtd_pvt[labels_safe]
 
-    fat_pvt.columns = [f"Fat_{c}" for c in fat_pvt.columns]
+    # renomeia colunas dos meses para contrato do app
+    fat_pvt.columns  = [f"Fat_{c}" for c in fat_pvt.columns]
     marg_pvt.columns = [f"Marg_Val_{c}" for c in marg_pvt.columns]
-    qtd_pvt.columns = [f"Qtd_{c}" for c in qtd_pvt.columns]
+    qtd_pvt.columns  = [f"Qtd_{c}" for c in qtd_pvt.columns]
 
-    # Junta dimensões + pivots (robusto com index name)
+    # reset preservando dimensões e renomeando para o padrão do app
+    fat_df  = fat_pvt.reset_index().rename(columns={
+        "cod_produto": "SKU",
+        "produto": "Produto",
+        "cod_barras": "Cod_Barras",
+        "fornecedor": "Fornecedor",
+        "fabricante": "Fabricante",
+        "area": "Area",
+    })
+
+    marg_df = marg_pvt.reset_index().rename(columns={
+        "cod_produto": "SKU",
+        "produto": "Produto",
+        "cod_barras": "Cod_Barras",
+        "fornecedor": "Fornecedor",
+        "fabricante": "Fabricante",
+        "area": "Area",
+    })
+
+    qtd_df  = qtd_pvt.reset_index().rename(columns={
+        "cod_produto": "SKU",
+        "produto": "Produto",
+        "cod_barras": "Cod_Barras",
+        "fornecedor": "Fornecedor",
+        "fabricante": "Fabricante",
+        "area": "Area",
+    })
+
+    # monta df_base unindo fat/marg/qtd no MESMO grão
+    join_keys = ["SKU", "Fornecedor", "Fabricante", "Area", "Produto", "Cod_Barras"]
     df_base = (
-        base_dim
-        .merge(_reset_pivot_index_to_sku(fat_pvt), on="SKU", how="left")
-        .merge(_reset_pivot_index_to_sku(marg_pvt), on="SKU", how="left")
-        .merge(_reset_pivot_index_to_sku(qtd_pvt), on="SKU", how="left")
+        fat_df
+        .merge(marg_df[join_keys + [c for c in marg_df.columns if c.startswith("Marg_Val_")]], on=join_keys, how="left")
+        .merge(qtd_df[join_keys + [c for c in qtd_df.columns if c.startswith("Qtd_")]], on=join_keys, how="left")
     )
+
+    # (opcional, mas ajuda) garante tipos numéricos nas colunas pivotadas
+    for c in [c for c in df_base.columns if c.startswith(("Fat_", "Marg_Val_", "Qtd_"))]:
+        df_base[c] = pd.to_numeric(df_base[c], errors="coerce").fillna(0.0)
 
     # ----------------------------------------------------------------------------------
     # DUPLICA COLUNAS PRA LEGACY (em lote, menos fragmentação)
