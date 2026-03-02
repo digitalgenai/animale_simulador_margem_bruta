@@ -927,6 +927,8 @@ def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, f
         produto_key = r.get("_produto_key") or r.get("id")
         if produto_key and produto_key in df_base.index:
             row = df_base.loc[produto_key]
+            if isinstance(row, pd.DataFrame):
+                row = row.iloc[0]
             hist = build_history_payload(row)
             return no_update, _history_component(hist, "t2", month_ctx).children
 
@@ -935,6 +937,8 @@ def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, f
         produto_key = r.get("_produto_key") or r.get("id")
         if produto_key and produto_key in df_base.index:
             row = df_base.loc[produto_key]
+            if isinstance(row, pd.DataFrame):
+                row = row.iloc[0]
             hist = build_history_payload(row)
             return _history_component(hist, "t1", month_ctx).children, no_update
         
@@ -950,6 +954,8 @@ def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, f
             produto_key = base_row.get("_produto_key") or base_row.get("id")
             if produto_key and produto_key in df_base.index:
                 row = df_base.loc[produto_key]
+                if isinstance(row, pd.DataFrame):
+                    row = row.iloc[0]
                 hist = build_history_payload(row)
                 # atualiza os dois painéis para manter consistência
                 return (
@@ -979,6 +985,8 @@ def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, f
         produto_key = (row_grid or {}).get("_produto_key") or (row_grid or {}).get("id")
         if produto_key and produto_key in df_base.index:
             row = df_base.loc[produto_key]
+            if isinstance(row, pd.DataFrame):
+                row = row.iloc[0]
             return _history_component(build_history_payload(row), "t1", month_ctx).children, no_update
 
     if trig == "grid-t2" and active_tab == "tab-2" and isinstance(cell2, dict):
@@ -986,6 +994,8 @@ def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, f
         produto_key = (row_grid or {}).get("_produto_key") or (row_grid or {}).get("id")
         if produto_key and produto_key in df_base.index:
             row = df_base.loc[produto_key]
+            if isinstance(row, pd.DataFrame):
+                row = row.iloc[0]
             return no_update, _history_component(build_history_payload(row), "t2", month_ctx).children
 
     return no_update, no_update

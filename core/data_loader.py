@@ -1101,12 +1101,10 @@ def load_base_data(
     df_base["Produto"] = df_base["Produto"].astype(str).str.strip()
     dupe_mask = df_base["Produto"].duplicated(keep=False)
 
-    df_base["Produto_Key"] = df_base["Produto"]
-    if dupe_mask.any():
-        df_base.loc[dupe_mask, "Produto_Key"] = df_base.loc[dupe_mask].apply(
-            lambda r: f"{r['Produto']} [{r.get('SKU', 'SEM_INFO')}]",
-            axis=1,
-        )
+    df_base["Produto_Key"] = df_base.apply(
+        lambda r: f"{r.get('Produto','')[:60]} [{r.get('SKU','SEM')}] ({r.get('Fornecedor','SEM')}) <{r.get('Cod_Barras','')}>",
+        axis=1,
+    )
 
     # Garante colunas de simulação
     for col, default in SIM_COLS_DEFAULTS.items():
