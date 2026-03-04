@@ -18,6 +18,8 @@ from core.calculations import (
     calcular_custo_necessario,
     calcular_margem_real_percentual,
     calcular_margem_real_valor,
+    calcular_margem_pond_percentual,
+    calcular_margem_real_valor_total,
 )
 
 from core.data_loader import get_month_context
@@ -42,8 +44,13 @@ def _get_sim_state(sim_store: Dict[str, Any], produto_key: str) -> Tuple[bool, f
     return sim_manual_ativa, sim_preco_man, sim_marg_man, sim_conc_ativa, sim_conc_delta
 
 
-def compute_summary(df_view_atual: pd.DataFrame, bench_ano: Dict[str, float], month_ctx: Dict[str, Any] | None = None) -> Dict[str, Any]:
-    if df_view_atual is None or df_view_atual.empty:
+def compute_summary(df_view: pd.DataFrame, bench_ano: dict, month_ctx=None):
+    """
+    Correção crítica:
+    - MG(mês) deve ser margem real PONDERADA/AGREGADA, não média de %.
+    - GL(Year) deve vir do bench_ano calculado como margem real anual agregada / fat anual agregada.
+    """
+    if df_view is None or df_view.empty:
         return {
             "fat_total": 0.0,
             "marg_pond": 0.0,
@@ -52,65 +59,60 @@ def compute_summary(df_view_atual: pd.DataFrame, bench_ano: Dict[str, float], mo
             "sku_b": 0,
             "sku_c": 0,
             "breakdown": [],
-            "hist_placeholder": True,
-            "margem_5m": 0.0,
         }
 
-    fat_total = float(df_view_atual.get("Fat_Ref", 0.0).sum())
-    marg_total = float(df_view_atual.get("Marg_Val_Ref", 0.0).sum())
-    marg_pond = (marg_total / fat_total) if fat_total > 0 else 0.0
+    # FAT do recorte
+    fat_total = float(pd.to_numeric(df_view.get("Fat_Ref"), errors="coerce").fillna(0.0).sum())
 
-    ctx = month_ctx or get_month_context()
-    labels_legacy = ctx.get("labels_legacy") or []
-    labels_5m = labels_legacy[-5:] if len(labels_legacy) >= 5 else []
+    # Margem % ponderada do recorte (margem real agregada / fat agregado)
+    marg_pond = float(calcular_margem_pond_percentual(df_view, col_fat="Fat_Ref", col_marg_val="Marg_Val_Ref"))
 
-    cols_fat_5m = [f"Fat_{m}" for m in labels_5m]
-    cols_marg_val_5m = [f"Marg_Val_{m}" for m in labels_5m]
-
-    if labels_5m and all(c in df_view_atual.columns for c in cols_fat_5m + cols_marg_val_5m):
-        fat_5m = float(df_view_atual[cols_fat_5m].sum().sum())
-        marg_5m = float(df_view_atual[cols_marg_val_5m].sum().sum())
-        margem_5m = (marg_5m / fat_5m) if fat_5m > 0 else 0.0
-    else:
-        margem_5m = 0.0
-
-    counts_abc = df_view_atual["Curva_ABC"].value_counts()
-    sku_a = int(counts_abc.get("A", 0))
-    sku_b = int(counts_abc.get("B", 0))
-    sku_c = int(counts_abc.get("C", 0))
-
-    # Breakdown (Top 5 categorias)
-    df_bd = (
-        df_view_atual.groupby("Area")
-        .agg(Fat=("Fat_Ref", "sum"), Marg=("Marg_Val_Ref", "sum"))
-        .sort_values("Fat", ascending=False)
-        .head(5)
-    )
-
+    # breakdown Top Categorias (Forn. vs Benchmarks)
     breakdown = []
-    for cat, row in df_bd.iterrows():
-        f = float(row["Fat"])
-        m = float(row["Marg"])
-        m_perc = (m / f) if f > 0 else 0.0
-        breakdown.append(
-            {
-                "categoria": str(cat),
-                "fat": f,
-                "marg_perc": m_perc,
-                "bench_ano": float(bench_ano.get(cat, 0.0)),
-            }
-        )
+    if "Area" in df_view.columns:
+        gb = df_view.groupby("Area", dropna=False)
+        for area, g in gb:
+            fat = float(pd.to_numeric(g.get("Fat_Ref"), errors="coerce").fillna(0.0).sum())
+            if fat <= 0:
+                continue
+
+            # MG(mês) correta: ponderada/real
+            mg = float(calcular_margem_pond_percentual(g, col_fat="Fat_Ref", col_marg_val="Marg_Val_Ref"))
+
+            # GL(Year): pega do bench_ano (pode ser float ou dict)
+            b = bench_ano.get(area, 0.0)
+            if isinstance(b, dict):
+                gl = float(b.get("marg_perc", 0.0))
+            else:
+                gl = float(b or 0.0)
+
+            breakdown.append(
+                {
+                    "categoria": str(area),
+                    "fat": fat,
+                    "marg_perc": mg,
+                    "bench_ano": gl,
+                }
+            )
+
+    # ordena top por FAT
+    breakdown.sort(key=lambda x: x["fat"], reverse=True)
+    breakdown = breakdown[:10]
+
+    # SKUs e ABC
+    qtd_sku = int(len(df_view))
+    sku_a = int((df_view.get("Curva_ABC") == "A").sum()) if "Curva_ABC" in df_view.columns else 0
+    sku_b = int((df_view.get("Curva_ABC") == "B").sum()) if "Curva_ABC" in df_view.columns else 0
+    sku_c = int((df_view.get("Curva_ABC") == "C").sum()) if "Curva_ABC" in df_view.columns else 0
 
     return {
         "fat_total": fat_total,
         "marg_pond": marg_pond,
-        "qtd_sku": int(len(df_view_atual)),
+        "qtd_sku": qtd_sku,
         "sku_a": sku_a,
         "sku_b": sku_b,
         "sku_c": sku_c,
         "breakdown": breakdown,
-        "hist_placeholder": True,
-        "margem_5m": margem_5m,
     }
 
 
@@ -154,26 +156,21 @@ def build_tab1_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
         rows.append(
             {
                 "id": produto_key,
-
                 "SKU": fmt_str(row.get("SKU")),
                 "Produto": str(produto_nome),
                 "ABC": fmt_str(row.get("Curva_ABC")),
                 "Categ": fmt_str(row.get("Area")),
                 "Qtd Ref": fmt_qtd(row.get("Qtd_Media_Mensal", 0.0)),
-
                 "Preço Atual": fmt_real(p_atual),
                 "Custo": fmt_real(c_atual),
                 "Marg R$": fmt_real(calcular_margem_real_valor(c_atual, p_atual, area=area)),
                 "Marg %": fmt_perc(marg_real),
-
                 NOME_CONC_1: fmt_real(val_conc1),
                 NOME_CONC_2: fmt_real(val_conc2),
                 "Dif % (Menor)": fmt_perc(dif_conc),
-
                 "Sim Preço": fmt_real(sim_p),
                 "Sim Marg": fmt_perc(sim_m),
                 "Sim Custo Nec": fmt_real(sim_c),
-
                 "_produto_key": produto_key,
                 "_produto_nome": str(produto_nome),
                 "_p_atual": p_atual,
@@ -184,7 +181,6 @@ def build_tab1_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
                 "_sim_preco_man": sim_preco_man,
                 "_sim_marg_man": sim_marg_man,
                 "_area": area,
-
                 "__is_neg": is_neg,
                 "__is_yellow": (not is_neg) and is_yellow,
             }
@@ -236,25 +232,20 @@ def build_tab2_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
         rows.append(
             {
                 "id": produto_key,
-
                 "SKU": fmt_str(row.get("SKU")),
                 "Produto": str(produto_nome),
                 "ABC": fmt_str(row.get("Curva_ABC")),
                 "Categ": fmt_str(row.get("Area")),
                 "Qtd Ref": fmt_qtd(row.get("Qtd_Media_Mensal", 0.0)),
-
                 "Preço Atual": fmt_real(p_atual),
                 "Custo": fmt_real(c_atual),
                 "Marg Atual %": fmt_perc(marg_real),
-
                 NOME_CONC_1: fmt_real(val_conc1),
                 NOME_CONC_2: fmt_real(val_conc2),
                 "Dif Atual (Menor)": fmt_perc(dif_atual),
-
                 "DELTA ALVO %": delta_str,
                 "Sim Preço (Conc)": fmt_real(sim_p_conc),
                 "Sim Margem (Result)": fmt_perc(sim_marg_result),
-
                 "_produto_key": produto_key,
                 "_produto_nome": str(produto_nome),
                 "_p_atual": p_atual,
@@ -264,7 +255,6 @@ def build_tab2_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
                 "_sim_conc_ativa": sim_conc_ativa,
                 "_sim_conc_delta": sim_conc_delta,
                 "_area": area,
-
                 "__is_neg": is_neg,
                 "__is_yellow": (not is_neg) and is_yellow,
             }

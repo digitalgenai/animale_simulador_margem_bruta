@@ -23,6 +23,8 @@ from core.config import (
     PGSCHEMA_DEFAULT,
     PGTABLE_DEFAULT,
     N_MESES_JANELA,
+    TAXA_DEDUCAO_FATURAMENTO,
+    TAXA_ESTETICA_SAUDE,
     # coleta (concorrentes)
     PGSCHEMA_COLETA_DEFAULT,
     COLETA_TABLE_MISSAO_DEFAULT,
@@ -71,8 +73,6 @@ _COLETA_COLS_CACHE: Dict[str, Dict[str, str]] = {}  # "schema.table" -> {lower_c
 def get_month_context() -> Dict[str, object]:
     """
     Retorna o contexto de meses calculado no último load_base_data().
-
-    Use isso em plots/callbacks no lugar de depender cegamente de LISTA_MESES_ANO/MESES_3M/MESES_6M do config.
     """
     return dict(_MONTH_CTX)
 
@@ -113,12 +113,6 @@ def _calc_curva_abc(df_prod: pd.DataFrame, fat_col: str) -> pd.Series:
 
 
 def _month_index(ts: pd.Series, start_month: pd.Timestamp) -> pd.Series:
-    """
-    Retorna o índice de mês (inteiro) relativo a start_month:
-      start_month => 0
-      start_month + 1 mês => 1
-      ...
-    """
     return (ts.dt.year - start_month.year) * 12 + (ts.dt.month - start_month.month)
 
 
@@ -130,32 +124,25 @@ def _build_months_ts(start_month: pd.Timestamp, n: int) -> List[pd.Timestamp]:
 
 
 def _labels_safe_from_ts(months_ts: List[pd.Timestamp]) -> List[str]:
-    # SAFE pra JS/AGGrid: só underscore
     return [m.strftime("%Y_%m") for m in months_ts]
 
 
 def _looks_like_iso_label(s: str) -> bool:
-    # "2026-01" ou "2026_01"
     return bool(re.match(r"^\d{4}[-_]\d{2}$", str(s).strip()))
 
 
 def _normalize_case_like(src: str, target: str) -> str:
-    # tenta manter "MAR" vs "Mar" etc.
     if src.isupper():
         return target.upper()
     if src.islower():
         return target.lower()
-    return target  # Title-case default
+    return target
 
 
 def _rotate_legacy_labels_to_start(
     legacy_labels: List[str],
     start_month: pd.Timestamp,
 ) -> Optional[List[str]]:
-    """
-    Se LISTA_MESES_ANO for algo tipo ["Jan","Fev",...], rotaciona pra começar no mês do start_month.
-    Se não der pra inferir, retorna None.
-    """
     if not legacy_labels:
         return None
 
@@ -172,7 +159,6 @@ def _rotate_legacy_labels_to_start(
 
     rot = legacy_labels[idx:] + legacy_labels[:idx]
 
-    # garante casing coerente para labels que parecem meses PT
     rot0 = str(rot[0])
     out: List[str] = []
     for j, x in enumerate(rot):
@@ -185,25 +171,16 @@ def _rotate_legacy_labels_to_start(
 
 
 def _build_labels_legacy(start_month: pd.Timestamp, n: int) -> List[str]:
-    """
-    Labels "legado" compatíveis com o resto do app:
-    - Se LISTA_MESES_ANO existir e for usável: alinha/rotaciona pra janela real.
-    - Caso contrário: gera algo estável (ex: "Jan_2026" ...) sem hífen.
-    """
-    # 1) tentar usar LISTA_MESES_ANO do config (sem quebrar janeiro)
     if isinstance(LISTA_MESES_ANO, (list, tuple)) and len(LISTA_MESES_ANO) >= n:
         base = [str(x).strip() for x in LISTA_MESES_ANO[:n]]
 
-        # se for ISO, não compensa "rotacionar", deixa como está
         if all(_looks_like_iso_label(x) for x in base):
-            # mas converte "-" -> "_" pra não matar JS
             return [x.replace("-", "_") for x in base]
 
         rot = _rotate_legacy_labels_to_start(base, start_month)
         if rot is not None and len(rot) >= n:
             return rot[:n]
 
-    # 2) fallback: "Jan_2026", "Fev_2026", ... (sem hífen)
     months_ts = _build_months_ts(start_month, n)
     labs: List[str] = []
     for m in months_ts:
@@ -213,9 +190,6 @@ def _build_labels_legacy(start_month: pd.Timestamp, n: int) -> List[str]:
 
 
 def _dedupe_labels(labels: List[str]) -> List[str]:
-    """
-    Evita colisão de labels (se acontecer), adicionando sufixo incremental.
-    """
     seen: Dict[str, int] = {}
     out: List[str] = []
     for x in labels:
@@ -229,28 +203,11 @@ def _dedupe_labels(labels: List[str]) -> List[str]:
     return out
 
 
-def _reset_pivot_index_to_sku(df_pvt: pd.DataFrame) -> pd.DataFrame:
-    """
-    Garante que o pivot resetado tenha coluna SKU (robusto contra index sem nome).
-    """
-    out = df_pvt.reset_index()
-    if "cod_produto" in out.columns:
-        return out.rename(columns={"cod_produto": "SKU"})
-    if "index" in out.columns:
-        return out.rename(columns={"index": "SKU"})
-    # fallback: assume primeira coluna é o índice
-    return out.rename(columns={out.columns[0]: "SKU"})
-
-
 def _human_month_label(ts: pd.Timestamp) -> str:
     return f"{_PT_ABBR[ts.month - 1]}/{ts.year}"
 
 
 def _clamp_month(target: pd.Timestamp, available: List[pd.Timestamp]) -> pd.Timestamp:
-    """
-    Garante que o mês selecionado exista dentro do range disponível no dataset.
-    Se estiver fora, "clampa" pro min/max existente.
-    """
     if not available:
         return target
     mn = min(available)
@@ -263,10 +220,6 @@ def _clamp_month(target: pd.Timestamp, available: List[pd.Timestamp]) -> pd.Time
 
 
 def _fetch_available_months(engine: Engine, full_table: str) -> List[pd.Timestamp]:
-    """
-    Busca meses existentes no dataset (DISTINCT date_trunc('month', data_venda)).
-    Cacheia por tabela no processo.
-    """
     if full_table in _AVAILABLE_MONTHS_CACHE and _AVAILABLE_MONTHS_CACHE[full_table]:
         return _AVAILABLE_MONTHS_CACHE[full_table]
 
@@ -290,7 +243,7 @@ def _fetch_available_months(engine: Engine, full_table: str) -> List[pd.Timestam
 
 
 # ======================================================================================
-# Concorrência (schema coleta)
+# Regras de dedução por área (para benchmark GL correto)
 # ======================================================================================
 
 def _norm_txt(s: str) -> str:
@@ -302,9 +255,25 @@ def _norm_txt(s: str) -> str:
     return s2
 
 
+def _is_estetica_saude(area: str) -> bool:
+    a = _norm_txt(area or "")
+    if not a:
+        return False
+    return ("estetic" in a) or ("saude" in a) or ("saud" in a)
+
+
+def _taxa_deducao(area: str) -> float:
+    if _is_estetica_saude(area):
+        return float(TAXA_ESTETICA_SAUDE)
+    return float(TAXA_DEDUCAO_FATURAMENTO)
+
+
+# ======================================================================================
+# Concorrência (schema coleta)
+# ======================================================================================
+
 def _quote_ident(name: str) -> str:
     s = str(name)
-    # identificadores simples (sem quote) -> mais rápido/limpo
     if re.match(r"^[a-z_][a-z0-9_]*$", s):
         return s
     return '"' + s.replace('"', '""') + '"'
@@ -379,9 +348,6 @@ def _pick_col(cols_lower: Dict[str, str], candidates: List[str]) -> Optional[str
 
 
 def _parse_price_series(s: pd.Series) -> pd.Series:
-    """
-    Converte preços vindos do coleta (às vezes texto com vírgula/mascara) -> float.
-    """
     if s is None:
         return pd.Series(dtype=float)
     out = s.astype(str).str.strip()
@@ -391,10 +357,6 @@ def _parse_price_series(s: pd.Series) -> pd.Series:
 
 
 def _map_concorrente_to_target_col(nome_conc: str) -> Optional[str]:
-    """
-    Mapeia concorrente -> coluna do simulador (col_conc_1 / col_conc_2).
-    Heurística (robusta): contém 'petz' ou 'procampo' no nome normalizado.
-    """
     n = _norm_txt(nome_conc or "")
     if not n:
         return None
@@ -406,9 +368,6 @@ def _map_concorrente_to_target_col(nome_conc: str) -> Optional[str]:
 
 
 def _norm_barcode_series(s: pd.Series) -> pd.Series:
-    """
-    Normaliza barcode para "só dígitos" e remove sufixo ".0" (quando veio como float).
-    """
     if s is None:
         return pd.Series(dtype=str)
     out = s.astype(str).str.strip()
@@ -418,22 +377,9 @@ def _norm_barcode_series(s: pd.Series) -> pd.Series:
 
 
 def _load_competitor_prices(engine: Engine, ref_month_start: Optional[pd.Timestamp]) -> pd.DataFrame:
-    """
-    Busca preços de concorrentes no schema coleta e devolve em formato wide por COD_BARRAS:
-
-        ["Cod_Barras", col_conc_1, col_conc_2]
-
-    Regra:
-      - Busca em coleta.missoes + coleta.missao_produtos + coleta.concorrentes
-      - Usa SEMPRE mp.codigo (barcode) como chave (alinhado ao seu import_preco_concorrentes.py)
-      - Preço: COALESCE(NULLIF(promo,0), NULLIF(base,0))
-      - Primeiro tenta filtrar pelo mês selecionado (date_trunc('month', criadaEm) == ref_month)
-        e se vier vazio, cai pro mais recente geral.
-    """
     schema = PGSCHEMA_COLETA_DEFAULT
 
     try:
-        # Resolve tabelas (candidates + env override)
         missao_tbl = _resolve_table(
             engine,
             schema,
@@ -449,7 +395,6 @@ def _load_competitor_prices(engine: Engine, ref_month_start: Optional[pd.Timesta
             schema,
             [COLETA_TABLE_CONCORRENTE_DEFAULT, "concorrentes", "concorrente"],
         )
-        # prod_tbl não é necessário pra chave (usaremos mp.codigo), mas deixo resolver por compat/log
         prod_tbl = _resolve_table(
             engine,
             schema,
@@ -477,7 +422,6 @@ def _load_competitor_prices(engine: Engine, ref_month_start: Optional[pd.Timesta
         mp_cols = _get_coleta_cols_lower(engine, schema, mp_tbl)
         c_cols = _get_coleta_cols_lower(engine, schema, conc_tbl)
 
-        # Colunas essenciais
         m_id = _pick_col(m_cols, ["id", "missao_id", "missaoid"])
         m_conc_id = _pick_col(m_cols, ["concorrenteId", "concorrente_id", "id_concorrente", "concorrenteid"])
 
@@ -491,8 +435,6 @@ def _load_competitor_prices(engine: Engine, ref_month_start: Optional[pd.Timesta
             ["precoConcorrentePromocao", "preco_concorrente_promocao", "precoconcorrentepromocao"],
         )
         mp_id = _pick_col(mp_cols, ["id", "missao_produto_id", "missaoproduto_id", "missaoprodutos_id"])
-
-        # Chave: barcode em missao_produtos.codigo
         mp_barcode = _pick_col(mp_cols, ["codigo", "cod_barras", "ean", "gtin", "barcode", "sku", "cod_produto"])
 
         if not (m_id and m_conc_id and c_id and c_nome and mp_missao_id and mp_barcode and (mp_preco or mp_preco_promo)):
@@ -510,7 +452,6 @@ def _load_competitor_prices(engine: Engine, ref_month_start: Optional[pd.Timesta
             )
             return pd.DataFrame()
 
-        # Data em missoes (pra filtro por mês / mais recente)
         m_dt = _pick_col(
             m_cols,
             ["criadaEm", "data", "data_missao", "data_execucao", "data_coleta", "dt", "dt_execucao", "dt_coleta",
@@ -528,7 +469,6 @@ def _load_competitor_prices(engine: Engine, ref_month_start: Optional[pd.Timesta
         barcode_expr = f"{mp_alias}.{_quote_ident(mp_barcode)}::text"
         conc_expr = f"{c_alias}.{_quote_ident(c_nome)}"
 
-        # Preço: prioriza promo quando > 0, senão base.
         if mp_preco_promo and mp_preco:
             promo_expr = f"{mp_alias}.{_quote_ident(mp_preco_promo)}"
             base_expr = f"{mp_alias}.{_quote_ident(mp_preco)}"
@@ -542,7 +482,6 @@ def _load_competitor_prices(engine: Engine, ref_month_start: Optional[pd.Timesta
 
         dt_expr = f"{m_alias}.{_quote_ident(m_dt)}" if m_dt else "NULL"
 
-        # ORDER BY p/ DISTINCT ON (mais recente)
         if m_dt:
             order_tail = f"{dt_expr} DESC NULLS LAST"
             if mp_id:
@@ -582,38 +521,26 @@ def _load_competitor_prices(engine: Engine, ref_month_start: Optional[pd.Timesta
                 logger.exception("Falha ao consultar concorrência em %s (use_month_filter=%s).", schema, use_month_filter)
                 return pd.DataFrame()
 
-        # 1) tenta filtrar pelo mês selecionado
         df_raw = _query(use_month_filter=True)
-
-        # 2) fallback: mais recente geral
         if df_raw.empty:
             df_raw = _query(use_month_filter=False)
-
-        logger.info("df_raw rows=%d cols=%s", len(df_raw), list(df_raw.columns))
-        if not df_raw.empty:
-            logger.info("concorrentes sample=%s", df_raw["Concorrente"].dropna().astype(str).head(10).tolist())
-            logger.info("barcode sample=%s", df_raw["Cod_Barras"].dropna().astype(str).head(10).tolist())
 
         if df_raw.empty:
             return pd.DataFrame()
 
-        # Normalização
         df_raw["Cod_Barras"] = _norm_barcode_series(df_raw["Cod_Barras"])
         df_raw["Concorrente"] = df_raw["Concorrente"].astype(str).str.strip()
         df_raw["Preco"] = _parse_price_series(df_raw["Preco"])
 
-        # mapeia apenas concorrentes do simulador (PETZ / PROCAMPO)
         df_raw["__target_col"] = df_raw["Concorrente"].apply(_map_concorrente_to_target_col)
         df_raw = df_raw[df_raw["__target_col"].notna()].copy()
         if df_raw.empty:
             return pd.DataFrame()
 
-        # mantém apenas preços > 0
         df_raw = df_raw[df_raw["Preco"] > 0].copy()
         if df_raw.empty:
             return pd.DataFrame()
 
-        # wide (barcode)
         df_wide = (
             df_raw.pivot_table(
                 index="Cod_Barras",
@@ -631,13 +558,6 @@ def _load_competitor_prices(engine: Engine, ref_month_start: Optional[pd.Timesta
 
         df_wide[col_conc_1] = pd.to_numeric(df_wide[col_conc_1], errors="coerce").fillna(0.0)
         df_wide[col_conc_2] = pd.to_numeric(df_wide[col_conc_2], errors="coerce").fillna(0.0)
-
-        logger.info("df_raw after map/filter rows=%d", len(df_raw))
-        logger.info(
-            "df_wide filled: petz=%d procampo=%d",
-            int((df_wide[col_conc_1] > 0).sum()),
-            int((df_wide[col_conc_2] > 0).sum()),
-        )
 
         return df_wide[["Cod_Barras", col_conc_1, col_conc_2]]
 
@@ -665,17 +585,6 @@ def load_base_data(
     List[str],
     List[str],
 ]:
-    """
-    ref_year/ref_month:
-      - representa o Mês/Ano selecionado no UI (ex: 2026/01)
-      - AGORA: métricas "Ref" (Qtd_Ref, Fat_Ref, Marg_Val_Ref etc.) usam o PRÓPRIO mês selecionado.
-        (antes usava mês anterior "fechado", por isso Jan/2026 mostrava Dez/2025)
-
-    Importante (pedido):
-      - schema 'stage' => somente obt_faturamento (faturamento)
-      - schema 'coleta' => concorrentes (preços) via missoes/concorrentes/missao_produtos
-      - JOIN de concorrência: POR COD_BARRAS (df_base.Cod_Barras <-> coleta.missao_produtos.codigo)
-    """
     schema = schema or PGSCHEMA_DEFAULT
     table = table or PGTABLE_DEFAULT
     n = int(n_months or N_MESES_JANELA)
@@ -687,7 +596,6 @@ def load_base_data(
 
     engine = engine or get_engine()
 
-    # 1) meses disponíveis (rápido)
     available_months_ts = _fetch_available_months(engine, full)
     available_labels_safe = [pd.Timestamp(m).strftime("%Y_%m") for m in available_months_ts]
     available_labels_human = [_human_month_label(pd.Timestamp(m)) for m in available_months_ts]
@@ -696,7 +604,6 @@ def load_base_data(
         df_base = pd.DataFrame()
         return df_base, {}, {}, {}, ["SEM DADOS"], []
 
-    # 2) ref_month_start do UI
     if ref_year is not None and ref_month is not None:
         try:
             ref_month_start = pd.Timestamp(int(ref_year), int(ref_month), 1).normalize()
@@ -705,10 +612,8 @@ def load_base_data(
     else:
         ref_month_start = max(available_months_ts)
 
-    # garante dentro do range real do dataset
     ref_month_start = _clamp_month(ref_month_start, available_months_ts)
 
-    # 3) janela de meses (termina em ref_month_start)
     start_month = (ref_month_start - pd.DateOffset(months=n - 1)).normalize()
     end_month_excl = (ref_month_start + pd.DateOffset(months=1)).normalize()
 
@@ -720,7 +625,6 @@ def load_base_data(
     safe_to_legacy = dict(zip(labels_safe, labels_legacy))
     legacy_to_safe = dict(zip(labels_legacy, labels_safe))
 
-    # Compat: mantemos chaves "closed_month" mas agora elas representam o mês selecionado
     _MONTH_CTX.update(
         {
             "start_month": start_month,
@@ -749,7 +653,6 @@ def load_base_data(
         n,
     )
 
-    # 4) Query AGREGADA (bem mais rápida): SKU x mês (stage.obt_faturamento)
     sql = text(
         f"""
         SELECT
@@ -789,7 +692,6 @@ def load_base_data(
         df_base = pd.DataFrame()
         return df_base, {}, {}, {}, ["SEM DADOS"], []
 
-    # Tipos / normalização (df_win já vem agregado)
     df_win["mes"] = pd.to_datetime(df_win["mes"], errors="coerce").dt.to_period("M").dt.to_timestamp().dt.normalize()
     df_win = df_win.dropna(subset=["mes"]).copy()
 
@@ -800,24 +702,19 @@ def load_base_data(
     df_win["fat"] = pd.to_numeric(df_win["fat"], errors="coerce").fillna(0.0)
     df_win["marg_val"] = pd.to_numeric(df_win["marg_val"], errors="coerce").fillna(0.0)
 
-    # Mes label SAFE por posição (mapeia timestamp -> safe)
     map_ts_to_safe = {pd.Timestamp(ts).normalize(): lab for ts, lab in zip(months_ts, labels_safe)}
     df_win["mes_label_safe"] = df_win["mes"].map(map_ts_to_safe).fillna("")
-
     df_win = df_win[df_win["mes_label_safe"] != ""].copy()
     if df_win.empty:
         df_base = pd.DataFrame()
         return df_base, {}, {}, {}, ["SEM DADOS"], []
 
-    # chaves dimensionais consistentes (grão correto p/ filtrar Fornecedor/Fabricante/Area)
     keys = ["cod_produto", "fornecedor", "fabricante", "area", "produto", "cod_barras"]
 
-    # pivota no grão CERTO
-    fat_pvt  = df_win.pivot_table(index=keys, columns="mes_label_safe", values="fat",      aggfunc="sum").fillna(0.0)
+    fat_pvt = df_win.pivot_table(index=keys, columns="mes_label_safe", values="fat", aggfunc="sum").fillna(0.0)
     marg_pvt = df_win.pivot_table(index=keys, columns="mes_label_safe", values="marg_val", aggfunc="sum").fillna(0.0)
-    qtd_pvt  = df_win.pivot_table(index=keys, columns="mes_label_safe", values="qtd",      aggfunc="sum").fillna(0.0)
+    qtd_pvt = df_win.pivot_table(index=keys, columns="mes_label_safe", values="qtd", aggfunc="sum").fillna(0.0)
 
-    # garante todas as colunas SAFE na ordem da janela real
     for m in labels_safe:
         if m not in fat_pvt.columns:
             fat_pvt[m] = 0.0
@@ -826,44 +723,47 @@ def load_base_data(
         if m not in qtd_pvt.columns:
             qtd_pvt[m] = 0.0
 
-    fat_pvt  = fat_pvt[labels_safe]
+    fat_pvt = fat_pvt[labels_safe]
     marg_pvt = marg_pvt[labels_safe]
-    qtd_pvt  = qtd_pvt[labels_safe]
+    qtd_pvt = qtd_pvt[labels_safe]
 
-    # renomeia colunas dos meses para contrato do app
-    fat_pvt.columns  = [f"Fat_{c}" for c in fat_pvt.columns]
+    fat_pvt.columns = [f"Fat_{c}" for c in fat_pvt.columns]
     marg_pvt.columns = [f"Marg_Val_{c}" for c in marg_pvt.columns]
-    qtd_pvt.columns  = [f"Qtd_{c}" for c in qtd_pvt.columns]
+    qtd_pvt.columns = [f"Qtd_{c}" for c in qtd_pvt.columns]
 
-    # reset preservando dimensões e renomeando para o padrão do app
-    fat_df  = fat_pvt.reset_index().rename(columns={
-        "cod_produto": "SKU",
-        "produto": "Produto",
-        "cod_barras": "Cod_Barras",
-        "fornecedor": "Fornecedor",
-        "fabricante": "Fabricante",
-        "area": "Area",
-    })
+    fat_df = fat_pvt.reset_index().rename(
+        columns={
+            "cod_produto": "SKU",
+            "produto": "Produto",
+            "cod_barras": "Cod_Barras",
+            "fornecedor": "Fornecedor",
+            "fabricante": "Fabricante",
+            "area": "Area",
+        }
+    )
 
-    marg_df = marg_pvt.reset_index().rename(columns={
-        "cod_produto": "SKU",
-        "produto": "Produto",
-        "cod_barras": "Cod_Barras",
-        "fornecedor": "Fornecedor",
-        "fabricante": "Fabricante",
-        "area": "Area",
-    })
+    marg_df = marg_pvt.reset_index().rename(
+        columns={
+            "cod_produto": "SKU",
+            "produto": "Produto",
+            "cod_barras": "Cod_Barras",
+            "fornecedor": "Fornecedor",
+            "fabricante": "Fabricante",
+            "area": "Area",
+        }
+    )
 
-    qtd_df  = qtd_pvt.reset_index().rename(columns={
-        "cod_produto": "SKU",
-        "produto": "Produto",
-        "cod_barras": "Cod_Barras",
-        "fornecedor": "Fornecedor",
-        "fabricante": "Fabricante",
-        "area": "Area",
-    })
+    qtd_df = qtd_pvt.reset_index().rename(
+        columns={
+            "cod_produto": "SKU",
+            "produto": "Produto",
+            "cod_barras": "Cod_Barras",
+            "fornecedor": "Fornecedor",
+            "fabricante": "Fabricante",
+            "area": "Area",
+        }
+    )
 
-    # monta df_base unindo fat/marg/qtd no MESMO grão
     join_keys = ["SKU", "Fornecedor", "Fabricante", "Area", "Produto", "Cod_Barras"]
     df_base = (
         fat_df
@@ -871,13 +771,9 @@ def load_base_data(
         .merge(qtd_df[join_keys + [c for c in qtd_df.columns if c.startswith("Qtd_")]], on=join_keys, how="left")
     )
 
-    # (opcional, mas ajuda) garante tipos numéricos nas colunas pivotadas
     for c in [c for c in df_base.columns if c.startswith(("Fat_", "Marg_Val_", "Qtd_"))]:
         df_base[c] = pd.to_numeric(df_base[c], errors="coerce").fillna(0.0)
 
-    # ----------------------------------------------------------------------------------
-    # DUPLICA COLUNAS PRA LEGACY (em lote, menos fragmentação)
-    # ----------------------------------------------------------------------------------
     new_cols: Dict[str, pd.Series] = {}
     for safe, legacy in safe_to_legacy.items():
         fat_s = f"Fat_{safe}"
@@ -898,9 +794,6 @@ def load_base_data(
     if new_cols:
         df_base = pd.concat([df_base, pd.DataFrame(new_cols)], axis=1)
 
-    # -------------------------
-    # Pipeline compatível Excel
-    # -------------------------
     for col in TEXT_COLS:
         if col in df_base.columns:
             df_base[col] = df_base[col].astype(str).str.strip().replace(["nan", "NaN", ""], "SEM_INFO")
@@ -916,15 +809,12 @@ def load_base_data(
     if "Fornecedor" in df_base.columns:
         df_base["Fornecedor"] = df_base["Fornecedor"].replace({"SEM_INFO": "SEM FORNECEDOR CADASTRADO"})
 
-    # Normaliza barcode base (chave p/ merge de concorrência)
     if "Cod_Barras" in df_base.columns:
         df_base["__barcode"] = _norm_barcode_series(df_base["Cod_Barras"])
     else:
         df_base["__barcode"] = ""
 
-    # Numéricos: BASE_NUM_COLS + meses (SAFE e LEGACY)
     cols_num = list(BASE_NUM_COLS)
-
     for m in labels_safe:
         cols_num.extend([f"Fat_{m}", f"Marg_Val_{m}", f"Qtd_{m}"])
     for m in labels_legacy:
@@ -941,19 +831,11 @@ def load_base_data(
     if col_conc_2 not in df_base.columns:
         df_base[col_conc_2] = 0.0
 
-    # =========================================================
-    # CONCORRÊNCIA (coleta): preenche col_conc_1 / col_conc_2
-    # JOIN: POR COD_BARRAS (df_base.__barcode <-> df_comp.__barcode)
-    # =========================================================
     try:
         df_comp = _load_competitor_prices(engine, ref_month_start)
         if df_comp is not None and not df_comp.empty:
             df_comp = df_comp.copy()
             df_comp["__barcode"] = _norm_barcode_series(df_comp["Cod_Barras"])
-
-            logger.info("df_comp rows=%d cols=%s", len(df_comp), list(df_comp.columns))
-            logger.info("df_base barcode sample=%s", df_base["__barcode"].dropna().astype(str).head(10).tolist())
-            logger.info("df_comp barcode sample=%s", df_comp["__barcode"].dropna().astype(str).head(10).tolist())
 
             df_base = df_base.merge(
                 df_comp.drop(columns=["Cod_Barras"], errors="ignore"),
@@ -972,18 +854,9 @@ def load_base_data(
 
             df_base[col_conc_1] = pd.to_numeric(df_base[col_conc_1], errors="coerce").fillna(0.0)
             df_base[col_conc_2] = pd.to_numeric(df_base[col_conc_2], errors="coerce").fillna(0.0)
-
-            logger.info(
-                "precos preenchidos: petz=%d procampo=%d",
-                int((df_base[col_conc_1] > 0).sum()),
-                int((df_base[col_conc_2] > 0).sum()),
-            )
     except Exception:
         logger.exception("Falha ao aplicar concorrência do schema coleta (continua com 0.0).")
 
-    # =========================================================
-    # TRIMESTRE / 6M / ANO: usa LEGACY por padrão (compat)
-    # =========================================================
     labels_3m = labels_legacy[-3:]
     labels_6m = labels_legacy[-6:]
 
@@ -1005,7 +878,6 @@ def load_base_data(
     df_base["Valor_Margem_Total_Trimestre"] = df_base[cols_marg_3m].sum(axis=1)
     df_base["Margem_Media_Trimestre"] = _safe_div(df_base["Valor_Margem_Total_Trimestre"], df_base["Fat_Total_Trimestre"])
 
-    # ======= MÊS REF AGORA = MÊS SELECIONADO (último mês da janela) =======
     mes_ref_safe = labels_safe[-1]
     fat_ref = f"Fat_{mes_ref_safe}"
     marg_ref = f"Marg_Val_{mes_ref_safe}"
@@ -1018,7 +890,6 @@ def load_base_data(
     if missing:
         raise RuntimeError(f"Colunas do mês-ref ausentes: {missing}. mes_ref_safe={mes_ref_safe}")
 
-    # Derivadas do mês ref (mês selecionado)
     df_base["Qtd_Ref"] = df_base[qtd_ref].fillna(0.0).round().astype(int)
     df_base["Preco_Atual"] = _safe_div(df_base[fat_ref], df_base[qtd_ref])
     df_base["Custo"] = _safe_div(df_base[fat_ref] - df_base[marg_ref], df_base[qtd_ref])
@@ -1042,7 +913,6 @@ def load_base_data(
     df_base["ABC"] = df_base["Curva_ABC"]
     df_base["Categ"] = df_base["Area"]
 
-    # Históricos
     qtd_cols_ano_safe = [f"Qtd_{m}" for m in labels_safe]
     qtd_cols_6m_safe = [f"Qtd_{m}" for m in labels_safe[-6:]]
     qtd_cols_3m_safe = [f"Qtd_{m}" for m in labels_safe[-3:]]
@@ -1059,10 +929,9 @@ def load_base_data(
     pico_safe = pico_col_safe.str.replace("Qtd_", "", regex=False)
     df_base["Hist_Mes_Pico"] = pico_safe.map(lambda s: safe_to_legacy.get(str(s), str(s)))
 
-    # Benchmarks globais
-    logger.info("Calculando Benchmarks Globais...")
+    # Benchmarks globais (CORRIGIDOS COM DEDUÇÃO)
+    logger.info("Calculando Benchmarks Globais (com dedução por área)...")
 
-    # copy rápido pra reduzir fragmentação depois de muita coluna
     df_base = df_base.copy()
 
     df_base["Temp_Fat_Ano"] = df_base[cols_fat_ano].sum(axis=1)
@@ -1072,13 +941,21 @@ def load_base_data(
     df_base["Temp_Fat_3M"] = df_base[cols_fat_3m].sum(axis=1)
     df_base["Temp_Marg_3M"] = df_base[cols_marg_3m].sum(axis=1)
 
+    # taxa por linha (depende da Area)
+    taxa = df_base["Area"].astype(str).fillna("").map(_taxa_deducao).astype(float)
+
+    # margem REAL com dedução: marg_val - td * fat
+    df_base["Temp_Marg_Ano_Real"] = df_base["Temp_Marg_Ano"] - (taxa * df_base["Temp_Fat_Ano"])
+    df_base["Temp_Marg_6M_Real"] = df_base["Temp_Marg_6M"] - (taxa * df_base["Temp_Fat_6M"])
+    df_base["Temp_Marg_3M_Real"] = df_base["Temp_Marg_3M"] - (taxa * df_base["Temp_Fat_3M"])
+
     df_bench = df_base.groupby("Area")[
-        ["Temp_Fat_Ano", "Temp_Marg_Ano", "Temp_Fat_6M", "Temp_Marg_6M", "Temp_Fat_3M", "Temp_Marg_3M"]
+        ["Temp_Fat_Ano", "Temp_Marg_Ano_Real", "Temp_Fat_6M", "Temp_Marg_6M_Real", "Temp_Fat_3M", "Temp_Marg_3M_Real"]
     ].sum()
 
-    df_bench["Bench_Ano"] = _safe_div(df_bench["Temp_Marg_Ano"], df_bench["Temp_Fat_Ano"])
-    df_bench["Bench_6M"] = _safe_div(df_bench["Temp_Marg_6M"], df_bench["Temp_Fat_6M"])
-    df_bench["Bench_3M"] = _safe_div(df_bench["Temp_Marg_3M"], df_bench["Temp_Fat_3M"])
+    df_bench["Bench_Ano"] = _safe_div(df_bench["Temp_Marg_Ano_Real"], df_bench["Temp_Fat_Ano"])
+    df_bench["Bench_6M"] = _safe_div(df_bench["Temp_Marg_6M_Real"], df_bench["Temp_Fat_6M"])
+    df_bench["Bench_3M"] = _safe_div(df_bench["Temp_Marg_3M_Real"], df_bench["Temp_Fat_3M"])
 
     bench_ano = df_bench["Bench_Ano"].fillna(0.0).replace([float("inf"), float("-inf")], 0.0).to_dict()
     bench_6m = df_bench["Bench_6M"].fillna(0.0).replace([float("inf"), float("-inf")], 0.0).to_dict()
@@ -1088,37 +965,32 @@ def load_base_data(
         columns=[
             "Temp_Fat_Ano",
             "Temp_Marg_Ano",
+            "Temp_Marg_Ano_Real",
             "Temp_Fat_6M",
             "Temp_Marg_6M",
+            "Temp_Marg_6M_Real",
             "Temp_Fat_3M",
             "Temp_Marg_3M",
+            "Temp_Marg_3M_Real",
         ],
         inplace=True,
         errors="ignore",
     )
 
-    # Índice por Produto
     df_base["Produto"] = df_base["Produto"].astype(str).str.strip()
-    dupe_mask = df_base["Produto"].duplicated(keep=False)
 
     df_base["Produto_Key"] = df_base.apply(
         lambda r: f"{r.get('Produto','')[:60]} [{r.get('SKU','SEM')}] ({r.get('Fornecedor','SEM')}) <{r.get('Cod_Barras','')}>",
         axis=1,
     )
 
-    # Garante colunas de simulação
     for col, default in SIM_COLS_DEFAULTS.items():
         if col not in df_base.columns:
             df_base[col] = default
 
     df_base = df_base.set_index("Produto_Key", drop=False)
 
-    # Listas globais
-    forn_ranking = (
-        df_base.groupby(COLUNA_AGREGACAO_PRINCIPAL)["Fat_Ref"]
-        .sum()
-        .sort_values(ascending=False)
-    )
+    forn_ranking = df_base.groupby(COLUNA_AGREGACAO_PRINCIPAL)["Fat_Ref"].sum().sort_values(ascending=False)
     lista_fornecedores = forn_ranking.index.tolist() or ["SEM DADOS"]
     lista_categorias_global = sorted(df_base["Area"].astype(str).unique().tolist())
 
