@@ -176,6 +176,19 @@ def _apply_row_class_rules() -> Dict[str, Any]:
     }
 
 
+def _is_hidden_category(val: Any) -> bool:
+    s = str(val or "").strip().lower()
+    return s in {"outros", "outro", "desconhecidos", "desconhecido"}
+
+
+def _format_currency_br(v: float) -> str:
+    try:
+        s = f"{float(v):,.2f}"
+        return "R$ " + s.replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return "R$ 0,00"
+
+
 def _format_kpi(label: str, value: str, color: str | None = None):
     style = {"display": "inline-block", "marginRight": "18px"}
     vstyle = {"fontWeight": "700"}
@@ -205,13 +218,17 @@ def _breakdown_component(breakdown: List[Dict[str, Any]], month_ctx: Dict[str, A
     )
     body_rows = []
     for b in breakdown:
+        cat = str(b.get("categoria", ""))
+        if _is_hidden_category(cat):
+            continue
+
         body_rows.append(
             html.Tr(
                 [
-                    html.Td(b["categoria"][:15]),
-                    html.Td(f"R$ {b['fat']:,.2f}"),
-                    html.Td(f"{b['marg_perc']:.1%}"),
-                    html.Td(f"{b['bench_ano']:.1%}"),
+                    html.Td(cat[:15]),
+                    html.Td(_format_currency_br(b["fat"])),
+                    html.Td(f"{b['marg_perc']:.2%}"),
+                    html.Td(f"{b['bench_ano']:.2%}"),
                 ]
             )
         )
@@ -857,7 +874,7 @@ def refresh_all(_, active_tab, mes_ref, forn, fab, cat, meta_t1, meta_t2, cat_t3
     def kpi_children(summary):
         return [
             _format_kpi("Fat. Total:", f"R$ {summary['fat_total']:,.2f}", None),
-            _format_kpi("Margem Média:", f"{summary['marg_pond']:.1%}", "blue"),
+            _format_kpi("Margem Média:", f"{summary['marg_pond']:.2%}", "blue"),
             html.Span("| ", style={"color": "#999"}),
             _format_kpi("Total SKUs:", str(summary["qtd_sku"]), None),
             _format_kpi("A:", str(summary["sku_a"]), "green"),
