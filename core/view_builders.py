@@ -19,6 +19,7 @@ from core.calculations import (
     calcular_margem_real_percentual,
     calcular_margem_real_valor,
     calcular_margem_pond_percentual,
+    calcular_margem_real_valor_total,
 )
 
 from core.data_loader import get_month_context
@@ -272,23 +273,34 @@ def build_tab3_rows(df_view_atual: pd.DataFrame) -> List[Dict[str, Any]]:
     if "Marg_Val_Ref" not in df_view_atual.columns:
         df_view_atual = df_view_atual.assign(Marg_Val_Ref=0.0)
 
-    df_agg = df_view_atual.groupby("Fornecedor")[["Fat_Ref", "Marg_Val_Ref"]].sum()
-    df_agg = df_agg.sort_values("Fat_Ref", ascending=False)
+    for forn_nome, g in df_view_atual.groupby("Fornecedor", dropna=False):
+        f_ref = float(pd.to_numeric(g["Fat_Ref"], errors="coerce").fillna(0.0).sum())
 
-    for forn_nome, row in df_agg.iterrows():
-        f_ref = float(row["Fat_Ref"])
-        m_ref_val = float(row["Marg_Val_Ref"])
-        m_ref_perc = (m_ref_val / f_ref) if f_ref > 0 else 0.0
+        m_ref_val_real = float(
+            calcular_margem_real_valor_total(
+                g,
+                col_fat="Fat_Ref",
+                col_marg_val="Marg_Val_Ref",
+                col_area="Area",
+            )
+        )
+
+        m_ref_perc_real = (m_ref_val_real / f_ref) if f_ref > 0 else 0.0
 
         rows.append(
             {
                 "id": str(forn_nome),
                 "Fornecedor": str(forn_nome),
                 "Fat Ref": fmt_real(f_ref),
-                "Margem Ref R$": fmt_real(m_ref_val),
-                "Margem Ref %": fmt_perc(m_ref_perc),
+                "Margem Ref R$": fmt_real(m_ref_val_real),
+                "Margem Ref %": fmt_perc(m_ref_perc_real),
             }
         )
+
+    rows.sort(
+        key=lambda x: float(str(x["Fat Ref"]).replace("R$", "").replace(".", "").replace(",", ".").strip() or 0),
+        reverse=True,
+    )
 
     return rows
 
