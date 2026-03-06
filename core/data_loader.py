@@ -992,7 +992,14 @@ def load_base_data(
 
     forn_ranking = df_base.groupby(COLUNA_AGREGACAO_PRINCIPAL)["Fat_Ref"].sum().sort_values(ascending=False)
     lista_fornecedores = forn_ranking.index.tolist() or ["SEM DADOS"]
-    lista_categorias_global = sorted(df_base["Area"].astype(str).unique().tolist())
+    hidden_cats = {"outros", "outro", "desconhecidos", "desconhecido"}
+    lista_categorias_global = sorted(
+        [
+            x
+            for x in df_base["Area"].astype(str).unique().tolist()
+            if str(x).strip().lower() not in hidden_cats
+        ]
+    )
 
     logger.info("Base carregada do Postgres: %d linhas", len(df_base))
     return df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global

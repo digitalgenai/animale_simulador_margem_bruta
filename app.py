@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-import io
+from openpyxl import load_workbook
 import logging
 import re
 import threading
@@ -149,17 +149,32 @@ def _filter_tab3(df_base: pd.DataFrame, cat_t3: str, forn_t3: str) -> pd.DataFra
 def _get_fab_cat_options_for_supplier(df_base: pd.DataFrame, forn: str) -> Tuple[List[str], List[str]]:
     if df_base is None or df_base.empty or not forn or forn == "[TODOS]":
         return ["[TODOS]"], ["[TODAS]"]
+
     df_forn = df_base[df_base[COLUNA_AGREGACAO_PRINCIPAL] == forn]
+
     lista_fab = sorted(df_forn["Fabricante"].unique().tolist())
     lista_fab.insert(0, "[TODOS]")
-    lista_cat = sorted(df_forn["Area"].unique().tolist())
+
+    hidden_cats = {"outros", "outro", "desconhecidos", "desconhecido"}
+    lista_cat = sorted(
+        [
+            x
+            for x in df_forn["Area"].astype(str).unique().tolist()
+            if str(x).strip().lower() not in hidden_cats
+        ]
+    )
     lista_cat.insert(0, "[TODAS]")
+
     return lista_fab, lista_cat
 
 
 def _get_supplier_options_for_category(df_base: pd.DataFrame, cat_t3: str) -> List[str]:
     if df_base is None or df_base.empty or not cat_t3:
         return ["[TODOS]"]
+
+    if str(cat_t3).strip().lower() in {"outros", "outro", "desconhecidos", "desconhecido"}:
+        return ["[TODOS]"]
+
     df_cat = df_base[df_base["Area"] == cat_t3]
     rank_forn_cat = df_cat.groupby("Fornecedor")["Fat_Ref"].sum().sort_values(ascending=False)
     lista_forn_cat = rank_forn_cat.index.tolist()
@@ -187,6 +202,83 @@ def _format_currency_br(v: float) -> str:
         return "R$ " + s.replace(",", "X").replace(".", ",").replace("X", ".")
     except Exception:
         return "R$ 0,00"
+
+
+def _parse_br_number_like_excel(val):
+    if val is None:
+        return None
+
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        return float(val)
+
+    s = str(val).strip()
+    if not s:
+        return None
+
+    is_percent = "%" in s
+
+    s = s.replace("R$", "").replace("%", "").replace(" ", "")
+
+    # padrão BR: 1.234,56
+    if "," in s and "." in s:
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    elif "," in s:
+        s = s.replace(".", "").replace(",", ".")
+
+    try:
+        num = float(s)
+        if is_percent:
+            num /= 100.0
+        return num
+    except Exception:
+        return val
+
+
+def _apply_excel_formats(ws):
+    currency_cols = {
+        "Preço Atual",
+        "Custo",
+        "Marg R$",
+        "Sim Preço",
+        "Sim Custo Nec",
+        "PETZ",
+        "PROCAMPO",
+        "Sim Preço (Conc)",
+        "Fat Ref",
+        "Margem Ref R$",
+    }
+
+    percent_cols = {
+        "Marg %",
+        "Sim Marg",
+        "Marg Atual %",
+        "Dif % (Menor)",
+        "Dif Atual (Menor)",
+        "DELTA ALVO %",
+        "Sim Margem (Result)",
+        "Margem Ref %",
+    }
+
+    integer_cols = {"Qtd Ref"}
+
+    header_map = {}
+    for col_idx, cell in enumerate(ws[1], start=1):
+        header = str(cell.value).strip() if cell.value is not None else ""
+        header_map[header] = col_idx
+
+    for header, col_idx in header_map.items():
+        for row_idx in range(2, ws.max_row + 1):
+            c = ws.cell(row=row_idx, column=col_idx)
+
+            if header in currency_cols and isinstance(c.value, (int, float)):
+                c.number_format = 'R$ #,##0.00'
+            elif header in percent_cols and isinstance(c.value, (int, float)):
+                c.number_format = '0.00%'
+            elif header in integer_cols and isinstance(c.value, (int, float)):
+                c.number_format = '0'
 
 
 def _format_kpi(label: str, value: str, color: str | None = None):
@@ -448,9 +540,9 @@ def make_summary_block(suffix: str):
                 ),
 
                 html.Div(
-                    "Obs.: o Fat. Total inclui itens classificados como 'SEM_INFO' (Outros/Desconhecidos).",
+                    'Obs.: o faturamento total inclui itens classificados como "Outros/Desconhecidos".',
                     className="small-muted",
-                    style={"marginTop": "4px"},
+                    style={"marginTop": "6px"},
                 ),
 
                 html.Hr(),
@@ -548,7 +640,6 @@ app.layout = dbc.Container(
                                         style={"width": "70px", "textAlign": "right", "marginRight": "8px"},
                                     ),
 
-                                    dbc.Button("Recalcular", id="btn-refresh", color="primary", className="me-2"),
                                     dbc.Button("Exportar", id="btn-export", color="success"),
                                 ],
                                 style={"display": "flex", "gap": "10px", "alignItems": "center", "flexWrap": "wrap"},
@@ -852,7 +943,6 @@ def on_cat_t3_change(mes_ref, cat_t3):
     Output("kpi-line-t3", "children"),
     Output("breakdown-t3", "children"),
 
-    Input("btn-refresh", "n_clicks"),
     Input("tabs", "active_tab"),
     Input("mes_ref", "value"),
     Input("forn", "value"),
@@ -864,9 +954,8 @@ def on_cat_t3_change(mes_ref, cat_t3):
     Input("forn_t3", "value"),
     Input("store-sim", "data"),
 )
-def refresh_all(_, active_tab, mes_ref, forn, fab, cat, meta_t1, meta_t2, cat_t3, forn_t3, sim_store):
-    force = (ctx.triggered_id == "btn-refresh")
-    df_base, bench_ano, _, _, _, _, month_ctx = _get_data_for_mes_ref(mes_ref, force_reload=force)
+def refresh_all(active_tab, mes_ref, forn, fab, cat, meta_t1, meta_t2, cat_t3, forn_t3, sim_store):
+    df_base, bench_ano, _, _, _, _, month_ctx = _get_data_for_mes_ref(mes_ref, force_reload=False)
 
     meta_t1_atual = _safe_float_percent(meta_t1, 0.30)
     meta_t2_atual = _safe_float_percent(meta_t2, 0.00)
@@ -884,7 +973,7 @@ def refresh_all(_, active_tab, mes_ref, forn, fab, cat, meta_t1, meta_t2, cat_t3
 
     def kpi_children(summary):
         return [
-            _format_kpi("Fat. Total:", f"R$ {summary['fat_total']:,.2f}", None),
+            _format_kpi("Fat. Total:", _format_currency_br(summary["fat_total"]), None),
             _format_kpi("Margem Média:", f"{summary['marg_pond']:.2%}", "blue"),
             html.Span("| ", style={"color": "#999"}),
             _format_kpi("Total SKUs:", str(summary["qtd_sku"]), None),
@@ -1239,7 +1328,7 @@ def modal_controller(
         delta_atual = sim_conc_delta if sim_conc_ativa else meta_t2_atual
 
         mkt_title = f"Mercado: {str(row_grid.get('_produto_nome',''))[:30]}"
-        mkt_menor = f"Menor Concorrente: R$ {menor_conc:,.2f}"
+        mkt_menor = f"Menor Concorrente: {_format_currency_br(menor_conc)}"
         mkt_delta_str = f"{delta_atual*100.0:.1f}"
 
         return (
@@ -1279,7 +1368,7 @@ def update_mkt_estimate(delta, selected, rowData):
     menor_conc = float(row.get("_menor_conc", 0.0))
     p_atual = float(row.get("_p_atual", 0.0))
     p_est = (menor_conc * (1 + d)) if menor_conc > 0 else p_atual
-    return f"R$ {p_est:,.2f}"
+    return _format_currency_br(p_est)
 
 
 # ---------- Exportar ----------
@@ -1308,7 +1397,6 @@ def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_st
         if df_base is None or df_base.empty:
             return no_update
 
-        # --- descobre colunas visíveis e rows da aba ---
         if active_tab == "tab-1":
             visible = _visible_fields_from_column_state(cs_t1)
             rows = rd_t1 or []
@@ -1335,43 +1423,41 @@ def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_st
 
         df_out = pd.DataFrame(rows)
 
-        # remove colunas internas do rowData
+        # remove colunas internas
         drop_tech = [c for c in df_out.columns if str(c).startswith("_") or str(c).startswith("__")]
         df_out.drop(columns=drop_tech, inplace=True, errors="ignore")
 
-        # aplica somente colunas visíveis
+        # mantém só as visíveis
         keep = [c for c in visible if c in df_out.columns]
         if keep:
             df_out = df_out[keep]
 
-        if active_tab == "tab-1":
-            visible = _visible_fields_from_column_state(cs_t1)
-        elif active_tab == "tab-2":
-            visible = _visible_fields_from_column_state(cs_t2)
-        else:
-            visible = _visible_fields_from_column_state(cs_t3)
+        # converte strings formatadas para número real
+        numeric_like_cols = {
+            "Qtd Ref",
+            "Preço Atual",
+            "Custo",
+            "Marg R$",
+            "Marg %",
+            "PETZ",
+            "PROCAMPO",
+            "Dif % (Menor)",
+            "Sim Preço",
+            "Sim Marg",
+            "Sim Custo Nec",
+            "Marg Atual %",
+            "Dif Atual (Menor)",
+            "DELTA ALVO %",
+            "Sim Preço (Conc)",
+            "Sim Margem (Result)",
+            "Fat Ref",
+            "Margem Ref R$",
+            "Margem Ref %",
+        }
 
-        if not visible:
-            if active_tab == "tab-1":
-                visible = [c["field"] for c in coldefs_t1 if c.get("field")]
-            elif active_tab == "tab-2":
-                visible = [c["field"] for c in coldefs_t2 if c.get("field")]
-            else:
-                visible = [c["field"] for c in coldefs_t3 if c.get("field")]
-
-        manual = (sim_store or {}).get("manual", {})
-        conc = (sim_store or {}).get("conc", {})
-
-        for produto_key, state in (manual or {}).items():
-            if produto_key in df_out.index and isinstance(state, dict) and state.get("ativa"):
-                df_out.at[produto_key, "Sim_Manual_Ativa"] = True
-                df_out.at[produto_key, "Sim_Preco_Manual"] = float(state.get("preco", 0.0))
-                df_out.at[produto_key, "Sim_Margem_Manual"] = float(state.get("margem", 0.0))
-
-        for produto_key, state in (conc or {}).items():
-            if produto_key in df_out.index and isinstance(state, dict) and state.get("ativa"):
-                df_out.at[produto_key, "Sim_Conc_Ativa"] = True
-                df_out.at[produto_key, "Sim_Conc_Delta"] = float(state.get("delta", 0.0))
+        for col in df_out.columns:
+            if col in numeric_like_cols:
+                df_out[col] = df_out[col].map(_parse_br_number_like_excel)
 
         mes_safe = (month_ctx or {}).get("ref_month_safe") or "MES"
         filename = f"Simulacao_{nome_tipo}_{mes_safe}.xlsx"
@@ -1380,7 +1466,12 @@ def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_st
         tmp_path = tmpdir / f"dash_export_{nome_tipo}_{mes_safe}.xlsx"
 
         with pd.ExcelWriter(tmp_path, engine="openpyxl") as writer:
-            df_out.to_excel(writer, index=False)
+            df_out.to_excel(writer, index=False, sheet_name="Simulacao")
+
+        wb = load_workbook(tmp_path)
+        ws = wb["Simulacao"]
+        _apply_excel_formats(ws)
+        wb.save(tmp_path)
 
         return dcc.send_file(str(tmp_path), filename=filename)
 

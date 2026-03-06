@@ -19,7 +19,6 @@ from core.calculations import (
     calcular_margem_real_percentual,
     calcular_margem_real_valor,
     calcular_margem_pond_percentual,
-    calcular_margem_real_valor_total,
 )
 
 from core.data_loader import get_month_context
