@@ -4,6 +4,7 @@ import unicodedata
 from typing import Optional
 
 import numpy as np
+import pandas as pd
 
 from core.config import TAXA_DEDUCAO_FATURAMENTO, TAXA_ESTETICA_SAUDE, col_conc_1, col_conc_2
 
@@ -22,7 +23,7 @@ def _norm_txt(s: str) -> str:
 
 def is_estetica_saude(area: Optional[str]) -> bool:
     """
-    Regra: aplica taxa extra (2.08%) para itens cuja Area remeta a Estética e/ou Saúde.
+    Regra: aplica taxa extra (2.38%) para itens cuja Area remeta a Estética e/ou Saúde.
 
     Implementação robusta:
     - aceita variações com/sem acento
@@ -40,7 +41,7 @@ def _taxa_deducao(area: Optional[str] = None, taxa_extra: float = 0.0) -> float:
 
     Regra:
     - Padrão: TAXA_DEDUCAO_FATURAMENTO (ex: 22,03%)
-    - Se Area for Estética e/ou Saúde: TAXA_ESTETICA_SAUDE (2,08%) -> substitui a padrão
+    - Se Area for Estética e/ou Saúde: TAXA_ESTETICA_SAUDE (2,38%) -> substitui a padrão
     - taxa_extra (opcional) é somada ao resultado final
     """
     extra = float(taxa_extra or 0.0)
@@ -116,3 +117,108 @@ def calcular_margem_real_valor(custo: float, preco: float, area: Optional[str] =
         return (preco * (1 - td)) - custo
     except Exception:
         return 0.0
+
+
+def calcular_margem_real_valor_total(
+    df: "pd.DataFrame",
+    *,
+    col_fat: str = "Fat_Ref",
+    col_marg_val: str = "Marg_Val_Ref",
+    col_area: str = "Area",
+    # fallback (caso não exista Marg_Val/Fat)
+    col_preco: str = "Preco_Ref",
+    col_custo: str = "Custo_Ref",
+    col_qtd: str = "Qtd_Ref",
+) -> float:
+    """
+    Soma da margem real em R$ (com dedução), agregada no dataframe.
+
+    Preferência (mais consistente com o pipeline atual):
+      - Se existirem colunas de FAT e margem bruta em R$ (ex: Fat_Ref / Marg_Val_Ref),
+        calcula:
+            margem_real_val = marg_bruta_val - (taxa_deducao(area) * fat)
+
+        E agrega somando tudo.
+
+    Fallback:
+      - Se não tiver Marg_Val/Fat, tenta:
+            sum( ((preco*(1-td)) - custo) * qtd )
+
+    Obs: se qtd não existir, assume 1.
+    """
+    if df is None or df.empty:
+        return 0.0
+
+    def _pick(*cands):
+        for c in cands:
+            if c in df.columns:
+                return c
+        return None
+
+    c_area = _pick(col_area, "Area", "Categ", "Categoria")
+
+    # 1) caminho preferido: marg_val + fat
+    c_fat = _pick(col_fat, "Fat_Ref", "Fat Ref", "fat", "FAT", "Faturamento")
+    c_marg_val = _pick(col_marg_val, "Marg_Val_Ref", "Marg_Val Ref", "marg_val", "Margem_Val", "Margem R$")
+
+    if c_fat and c_marg_val:
+        fat = pd.to_numeric(df[c_fat], errors="coerce").fillna(0.0)
+        marg_bruta = pd.to_numeric(df[c_marg_val], errors="coerce").fillna(0.0)
+
+        if c_area:
+            areas = df[c_area].astype(str).fillna("")
+            td = areas.map(lambda a: _taxa_deducao(a))
+        else:
+            td = 0.0
+
+        marg_real = marg_bruta - (fat * td)
+        return float(marg_real.sum())
+
+    # 2) fallback: preco/custo/qtd
+    c_preco = _pick(col_preco, "Preco_Mais_Recente", "Preço Atual", "Preco", "Preco_Atual")
+    c_custo = _pick(col_custo, "Custo_Mais_Recente", "Custo", "Custo_Atual")
+    c_qtd = _pick(col_qtd, "Qtd_Ref", "Qtd Ref", "Qtd", "Quantidade", "Qtd_Media_Mensal")
+
+    if not c_preco or not c_custo:
+        return 0.0
+
+    preco = pd.to_numeric(df[c_preco], errors="coerce").fillna(0.0)
+    custo = pd.to_numeric(df[c_custo], errors="coerce").fillna(0.0)
+    qtd = pd.to_numeric(df[c_qtd], errors="coerce").fillna(1.0) if c_qtd else 1.0
+
+    if c_area:
+        areas = df[c_area].astype(str).fillna("")
+        td = areas.map(lambda a: _taxa_deducao(a))
+    else:
+        td = 0.0
+
+    marg_unit = (preco * (1.0 - td)) - custo
+    marg_total = (marg_unit * qtd).sum()
+    return float(marg_total)
+
+
+def calcular_margem_pond_percentual(
+    df: "pd.DataFrame",
+    *,
+    col_fat: str = "Fat_Ref",
+    **kwargs,
+) -> float:
+    """
+    Margem % ponderada:
+      (margem_total_R$ / faturamento_total_R$)
+
+    kwargs vai para calcular_margem_real_valor_total.
+    """
+    if df is None or df.empty:
+        return 0.0
+
+    col_fat2 = col_fat if col_fat in df.columns else ("Fat Ref" if "Fat Ref" in df.columns else None)
+    if not col_fat2:
+        return 0.0
+
+    fat_total = pd.to_numeric(df[col_fat2], errors="coerce").fillna(0.0).sum()
+    if fat_total <= 0:
+        return 0.0
+
+    marg_total = calcular_margem_real_valor_total(df, col_fat=col_fat2, **kwargs)
+    return float(marg_total / fat_total)

@@ -446,6 +446,13 @@ def make_summary_block(suffix: str):
                     ],
                     id=f"kpi-line-{suffix}",
                 ),
+
+                html.Div(
+                    "Obs.: o Fat. Total inclui itens classificados como 'SEM_INFO' (Outros/Desconhecidos).",
+                    className="small-muted",
+                    style={"marginTop": "4px"},
+                ),
+
                 html.Hr(),
                 dbc.Row(
                     [
@@ -457,7 +464,11 @@ def make_summary_block(suffix: str):
                             md=7,
                         ),
                         dbc.Col(
-                            _history_component({"produto": "Selecione...", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"}, suffix, month_ctx0),
+                            _history_component(
+                                {"produto": "Selecione...", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"},
+                                suffix,
+                                month_ctx0,
+                            ),
                             md=5,
                         ),
                     ],
