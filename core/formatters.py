@@ -20,7 +20,7 @@ def fmt_real(val):
 def fmt_perc(val):
     try:
         if isinstance(val, (int, float)) and not np.isnan(val):
-            return f"{_br_number(val * 100, 1)}%"
+            return f"{_br_number(val * 100, 2)}%"
     except Exception:
         pass
     return "-"
