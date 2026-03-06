@@ -273,6 +273,8 @@ def build_tab3_rows(df_view_atual: pd.DataFrame) -> List[Dict[str, Any]]:
     if "Marg_Val_Ref" not in df_view_atual.columns:
         df_view_atual = df_view_atual.assign(Marg_Val_Ref=0.0)
 
+    temp_rows = []
+
     for forn_nome, g in df_view_atual.groupby("Fornecedor", dropna=False):
         f_ref = float(pd.to_numeric(g["Fat_Ref"], errors="coerce").fillna(0.0).sum())
 
@@ -287,8 +289,9 @@ def build_tab3_rows(df_view_atual: pd.DataFrame) -> List[Dict[str, Any]]:
 
         m_ref_perc_real = (m_ref_val_real / f_ref) if f_ref > 0 else 0.0
 
-        rows.append(
+        temp_rows.append(
             {
+                "_fat_sort": f_ref,
                 "id": str(forn_nome),
                 "Fornecedor": str(forn_nome),
                 "Fat Ref": fmt_real(f_ref),
@@ -297,10 +300,11 @@ def build_tab3_rows(df_view_atual: pd.DataFrame) -> List[Dict[str, Any]]:
             }
         )
 
-    rows.sort(
-        key=lambda x: float(str(x["Fat Ref"]).replace("R$", "").replace(".", "").replace(",", ".").strip() or 0),
-        reverse=True,
-    )
+    temp_rows.sort(key=lambda x: x["_fat_sort"], reverse=True)
+
+    for r in temp_rows:
+        r.pop("_fat_sort", None)
+        rows.append(r)
 
     return rows
 
