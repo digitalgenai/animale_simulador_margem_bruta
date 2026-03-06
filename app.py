@@ -264,6 +264,11 @@ def _apply_excel_formats(ws):
 
     integer_cols = {"Qtd Ref"}
 
+    # formato explícito em pt-BR / Real
+    fmt_currency_br = r'[$R$-pt-BR] #,##0.00'
+    fmt_percent_2 = '0.00%'
+    fmt_integer = '0'
+
     header_map = {}
     for col_idx, cell in enumerate(ws[1], start=1):
         header = str(cell.value).strip() if cell.value is not None else ""
@@ -274,11 +279,11 @@ def _apply_excel_formats(ws):
             c = ws.cell(row=row_idx, column=col_idx)
 
             if header in currency_cols and isinstance(c.value, (int, float)):
-                c.number_format = 'R$ #,##0.00'
+                c.number_format = fmt_currency_br
             elif header in percent_cols and isinstance(c.value, (int, float)):
-                c.number_format = '0.00%'
+                c.number_format = fmt_percent_2
             elif header in integer_cols and isinstance(c.value, (int, float)):
-                c.number_format = '0'
+                c.number_format = fmt_integer
 
 
 def _format_kpi(label: str, value: str, color: str | None = None):
