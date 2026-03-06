@@ -217,24 +217,51 @@ def _parse_br_number_like_excel(val):
 
     is_percent = "%" in s
 
-    s = s.replace("R$", "").replace("%", "").replace(" ", "")
+    # remove símbolos monetários e espaços
+    s = (
+        s.replace("R$", "")
+         .replace("$", "")
+         .replace("%", "")
+         .replace("\u00a0", "")
+         .replace(" ", "")
+         .strip()
+    )
 
-    # padrão BR: 1.234,56
+    if not s:
+        return None
+
+    # caso tenha negativo entre parênteses: (1.234,56)
+    neg = False
+    if s.startswith("(") and s.endswith(")"):
+        neg = True
+        s = s[1:-1].strip()
+
+    # se tem . e ,:
+    # - se a última vírgula vem depois do último ponto => padrão BR (1.234,56)
+    # - senão => padrão US (1,234.56)
     if "," in s and "." in s:
         if s.rfind(",") > s.rfind("."):
+            # BR
             s = s.replace(".", "").replace(",", ".")
         else:
+            # US
             s = s.replace(",", "")
     elif "," in s:
+        # só vírgula -> assume decimal BR
         s = s.replace(".", "").replace(",", ".")
+    else:
+        # só ponto ou inteiro -> mantém
+        pass
 
     try:
         num = float(s)
+        if neg:
+            num = -num
         if is_percent:
             num /= 100.0
         return num
     except Exception:
-        return val
+        return None
 
 
 def _apply_excel_formats(ws):
@@ -264,9 +291,7 @@ def _apply_excel_formats(ws):
 
     integer_cols = {"Qtd Ref"}
 
-    # formato mais robusto para Excel em pt-BR
-    fmt_currency_br = 'R$ #,##0.00'
-    fmt_currency_br_neg = 'R$ #,##0.00;[Red]-R$ #,##0.00'
+    fmt_currency_br = 'R$ #,##0.00;[Red]-R$ #,##0.00'
     fmt_percent_2 = '0.00%'
     fmt_integer = '0'
 
@@ -280,7 +305,7 @@ def _apply_excel_formats(ws):
             c = ws.cell(row=row_idx, column=col_idx)
 
             if header in currency_cols and isinstance(c.value, (int, float)):
-                c.number_format = fmt_currency_br_neg
+                c.number_format = fmt_currency_br
             elif header in percent_cols and isinstance(c.value, (int, float)):
                 c.number_format = fmt_percent_2
             elif header in integer_cols and isinstance(c.value, (int, float)):
