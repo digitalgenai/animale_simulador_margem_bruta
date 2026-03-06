@@ -264,8 +264,9 @@ def _apply_excel_formats(ws):
 
     integer_cols = {"Qtd Ref"}
 
-    # formato explícito em pt-BR / Real
-    fmt_currency_br = r'[$R$-pt-BR] #,##0.00'
+    # formato mais robusto para Excel em pt-BR
+    fmt_currency_br = 'R$ #,##0.00'
+    fmt_currency_br_neg = 'R$ #,##0.00;[Red]-R$ #,##0.00'
     fmt_percent_2 = '0.00%'
     fmt_integer = '0'
 
@@ -279,7 +280,7 @@ def _apply_excel_formats(ws):
             c = ws.cell(row=row_idx, column=col_idx)
 
             if header in currency_cols and isinstance(c.value, (int, float)):
-                c.number_format = fmt_currency_br
+                c.number_format = fmt_currency_br_neg
             elif header in percent_cols and isinstance(c.value, (int, float)):
                 c.number_format = fmt_percent_2
             elif header in integer_cols and isinstance(c.value, (int, float)):
@@ -1463,6 +1464,7 @@ def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_st
         for col in df_out.columns:
             if col in numeric_like_cols:
                 df_out[col] = df_out[col].map(_parse_br_number_like_excel)
+                df_out[col] = pd.to_numeric(df_out[col], errors="coerce")
 
         mes_safe = (month_ctx or {}).get("ref_month_safe") or "MES"
         filename = f"Simulacao_{nome_tipo}_{mes_safe}.xlsx"

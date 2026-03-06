@@ -3,18 +3,33 @@ from __future__ import annotations
 import numpy as np
 
 
+def _br_number(val: float, decimals: int = 2) -> str:
+    s = f"{float(val):,.{decimals}f}"
+    return s.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
 def fmt_real(val):
-    return f"R$ {val:,.2f}" if isinstance(val, (int, float)) and not np.isnan(val) else "-"
+    try:
+        if isinstance(val, (int, float)) and not np.isnan(val):
+            return f"R$ {_br_number(val, 2)}"
+    except Exception:
+        pass
+    return "-"
 
 
 def fmt_perc(val):
-    return f"{val:.1%}" if isinstance(val, (int, float)) and not np.isnan(val) else "-"
+    try:
+        if isinstance(val, (int, float)) and not np.isnan(val):
+            return f"{_br_number(val * 100, 1)}%"
+    except Exception:
+        pass
+    return "-"
 
 
 def fmt_media(val):
     try:
         val = float(val)
-        return f"{val:,.2f}" if not np.isnan(val) else "-"
+        return _br_number(val, 2) if not np.isnan(val) else "-"
     except Exception:
         return "-"
 
@@ -22,7 +37,7 @@ def fmt_media(val):
 def fmt_qtd(val):
     try:
         val = float(val)
-        return f"{val:,.0f}" if not np.isnan(val) else "-"
+        return _br_number(val, 0) if not np.isnan(val) else "-"
     except Exception:
         return "-"
 
