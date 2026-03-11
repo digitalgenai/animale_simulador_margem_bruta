@@ -399,6 +399,16 @@ def _history_component(hist: Dict[str, Any], suffix: str, month_ctx: Dict[str, A
         id=f"hist-box-{suffix}",
     )
 
+def _get_last_closed_month_ts(month_ctx: Dict[str, Any] | None) -> pd.Timestamp | None:
+    ctx2 = month_ctx or {}
+
+    safe = ctx2.get("ref_month_safe") or ctx2.get("closed_month_safe")
+    y, m = _parse_ym_safe(str(safe)) if safe else (None, None)
+    if not y or not m:
+        return None
+
+    ts = pd.Timestamp(year=y, month=m, day=1)
+    return ts - pd.DateOffset(months=1)
 
 def _row_from_event(cell_event: dict, rowData: list[dict] | None):
     if not cell_event or not rowData:
@@ -421,16 +431,9 @@ _PT_ABBR = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out"
 
 
 def _closed_month_label(month_ctx: Dict[str, Any] | None) -> str:
-    ctx2 = month_ctx or {}
-    ts = ctx2.get("closed_month")
+    ts = _get_last_closed_month_ts(month_ctx)
     if isinstance(ts, pd.Timestamp):
         return f"{_PT_ABBR[ts.month - 1]}/{ts.year}"
-
-    safe = ctx2.get("closed_month_safe")  # "YYYY_MM"
-    y, m = _parse_ym_safe(str(safe)) if safe else (None, None)
-    if y and m:
-        return f"{_PT_ABBR[m - 1]}/{y}"
-
     return "Mês"
 
 

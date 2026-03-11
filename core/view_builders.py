@@ -46,17 +46,28 @@ def _parse_year_month_from_col(col_name: str) -> tuple[int | None, int | None]:
 
     return None, None
 
-def _extract_peak_in_closed_year(row: pd.Series, month_ctx: Dict[str, Any] | None = None) -> str:
+def _get_last_closed_month_ts(month_ctx: Dict[str, Any] | None) -> pd.Timestamp | None:
     ctx = month_ctx or {}
-    closed_month = ctx.get("closed_month")
+
+    safe = ctx.get("ref_month_safe") or ctx.get("closed_month_safe")
+    if not safe:
+        return None
+
+    try:
+        ts = pd.to_datetime(str(safe).replace("_", "-") + "-01")
+        return ts - pd.DateOffset(months=1)
+    except Exception:
+        return None
+
+def _extract_peak_in_closed_year(row: pd.Series, month_ctx: Dict[str, Any] | None = None) -> str:
+    closed_month = _get_last_closed_month_ts(month_ctx)
 
     if not isinstance(closed_month, pd.Timestamp):
-        safe = ctx.get("closed_month_safe")
-        if safe:
-            try:
-                closed_month = pd.to_datetime(str(safe).replace("_", "-") + "-01")
-            except Exception:
-                closed_month = None
+        mes = row.get("Hist_Mes_Pico", "")
+        qtd = _fmt_int_no_decimals(row.get("Hist_Qtd_Pico", 0))
+        if not mes or str(mes).strip().upper() == "SEM_INFO":
+            return "-"
+        return f"{mes} ({qtd})"
 
     if not isinstance(closed_month, pd.Timestamp):
         mes = row.get("Hist_Mes_Pico", "SEM_INFO")
@@ -387,6 +398,6 @@ def build_history_payload(row: pd.Series, month_ctx: Dict[str, Any] | None = Non
         "produto": ((produto_nome[:30] + "...") if len(produto_nome) > 30 else produto_nome) or "-",
         "hist_6m": fmt_media(row.get("Hist_Qtd_Media_6M", 0.0)),
         "hist_3m": fmt_media(row.get("Hist_Qtd_Media_3M", 0.0)),
-        "hist_ref": fmt_media(row.get("Qtd_Media_Mensal", 0.0)),
+        "hist_ref": _fmt_int_no_decimals(row.get("Qtd_Media_Mensal", 0.0)),
         "hist_pico": _extract_peak_in_closed_year(row, month_ctx),
     }
