@@ -864,8 +864,18 @@ def load_base_data(
     cols_marg_3m = [f"Marg_Val_{m}" for m in labels_3m]
     cols_fat_6m = [f"Fat_{m}" for m in labels_6m]
     cols_marg_6m = [f"Marg_Val_{m}" for m in labels_6m]
-    cols_fat_ano = [f"Fat_{m}" for m in labels_legacy]
-    cols_marg_ano = [f"Marg_Val_{m}" for m in labels_legacy]
+
+    ref_year_num = int(ref_month_start.year)
+    ref_month_num = int(ref_month_start.month)
+
+    labels_safe_ytd = [
+        m.strftime("%Y_%m")
+        for m in months_ts
+        if m.year == ref_year_num and m.month <= ref_month_num
+    ]
+
+    cols_fat_ano = [f"Fat_{m}" for m in labels_safe_ytd]
+    cols_marg_ano = [f"Marg_Val_{m}" for m in labels_safe_ytd]
 
     _ensure_columns(df_base, cols_fat_3m, 0.0)
     _ensure_columns(df_base, cols_marg_3m, 0.0)

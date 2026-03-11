@@ -430,8 +430,17 @@ def _row_from_event(cell_event: dict, rowData: list[dict] | None):
 _PT_ABBR = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 
 
+def _get_ref_month_ts(month_ctx: Dict[str, Any] | None) -> pd.Timestamp | None:
+    ctx2 = month_ctx or {}
+    safe = ctx2.get("ref_month_safe") or ctx2.get("closed_month_safe")
+    y, m = _parse_ym_safe(str(safe)) if safe else (None, None)
+    if not y or not m:
+        return None
+    return pd.Timestamp(year=y, month=m, day=1)
+
+
 def _closed_month_label(month_ctx: Dict[str, Any] | None) -> str:
-    ts = _get_last_closed_month_ts(month_ctx)
+    ts = _get_ref_month_ts(month_ctx)
     if isinstance(ts, pd.Timestamp):
         return f"{_PT_ABBR[ts.month - 1]}/{ts.year}"
     return "Mês"
