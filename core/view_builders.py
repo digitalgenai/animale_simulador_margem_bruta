@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Dict, Any, List, Tuple
 
 import pandas as pd
+import re
 
 from core.config import (
     col_conc_1,
@@ -24,6 +25,77 @@ from core.calculations import (
 
 from core.data_loader import get_month_context
 
+_PT_ABBR = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+
+def _fmt_int_no_decimals(val: Any) -> str:
+    try:
+        return str(int(round(float(val))))
+    except Exception:
+        return "-"
+    
+def _parse_year_month_from_col(col_name: str) -> tuple[int | None, int | None]:
+    s = str(col_name or "").strip()
+
+    m = re.search(r"(20\d{2})[_-](0[1-9]|1[0-2])", s)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+
+    m = re.search(r"(0[1-9]|1[0-2])[/_-](20\d{2})", s)
+    if m:
+        return int(m.group(2)), int(m.group(1))
+
+    return None, None
+
+def _extract_peak_in_closed_year(row: pd.Series, month_ctx: Dict[str, Any] | None = None) -> str:
+    ctx = month_ctx or {}
+    closed_month = ctx.get("closed_month")
+
+    if not isinstance(closed_month, pd.Timestamp):
+        safe = ctx.get("closed_month_safe")
+        if safe:
+            try:
+                closed_month = pd.to_datetime(str(safe).replace("_", "-") + "-01")
+            except Exception:
+                closed_month = None
+
+    if not isinstance(closed_month, pd.Timestamp):
+        mes = row.get("Hist_Mes_Pico", "SEM_INFO")
+        qtd = _fmt_int_no_decimals(row.get("Hist_Qtd_Pico", 0))
+        return f"{mes} ({qtd})" if mes else "-"
+
+    target_year = int(closed_month.year)
+    target_month_limit = int(closed_month.month)
+
+    qty_keywords = ("qtd", "qtde", "quant", "venda", "vendido", "volume")
+    candidates = []
+
+    for col in row.index:
+        col_str = str(col or "")
+        col_lower = col_str.lower()
+
+        if not any(k in col_lower for k in qty_keywords):
+            continue
+
+        year, month = _parse_year_month_from_col(col_str)
+        if not year or not month:
+            continue
+
+        if year != target_year or month > target_month_limit:
+            continue
+
+        val = pd.to_numeric(pd.Series([row.get(col)]), errors="coerce").iloc[0]
+        if pd.isna(val):
+            continue
+
+        candidates.append((year, month, float(val)))
+
+    if not candidates:
+        mes = row.get("Hist_Mes_Pico", "SEM_INFO")
+        qtd = _fmt_int_no_decimals(row.get("Hist_Qtd_Pico", 0))
+        return f"{mes} ({qtd})" if mes else "-"
+
+    peak_year, peak_month, peak_qty = max(candidates, key=lambda x: x[2])
+    return f"{_PT_ABBR[peak_month - 1]}/{peak_year} ({_fmt_int_no_decimals(peak_qty)})"
 
 def _get_sim_state(sim_store: Dict[str, Any], produto_key: str) -> Tuple[bool, float, float, bool, float]:
     """
@@ -309,15 +381,12 @@ def build_tab3_rows(df_view_atual: pd.DataFrame) -> List[Dict[str, Any]]:
     return rows
 
 
-def build_history_payload(row: pd.Series) -> Dict[str, Any]:
-    """
-    Replica a atualização do painel 'Detalhes (Inteligência Temporal)' das abas 1 e 2.
-    """
+def build_history_payload(row: pd.Series, month_ctx: Dict[str, Any] | None = None) -> Dict[str, Any]:
     produto_nome = str(row.get("Produto", ""))
     return {
-        "produto": (produto_nome[:30] + "...") if len(produto_nome) > 30 else produto_nome,
+        "produto": ((produto_nome[:30] + "...") if len(produto_nome) > 30 else produto_nome) or "-",
         "hist_6m": fmt_media(row.get("Hist_Qtd_Media_6M", 0.0)),
         "hist_3m": fmt_media(row.get("Hist_Qtd_Media_3M", 0.0)),
         "hist_ref": fmt_media(row.get("Qtd_Media_Mensal", 0.0)),
-        "hist_pico": f"{row.get('Hist_Mes_Pico','SEM_INFO')} ({fmt_qtd(row.get('Hist_Qtd_Pico', 0.0))})",
+        "hist_pico": _extract_peak_in_closed_year(row, month_ctx),
     }

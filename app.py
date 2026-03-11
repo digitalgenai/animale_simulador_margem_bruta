@@ -361,10 +361,21 @@ def _breakdown_component(breakdown: List[Dict[str, Any]], month_ctx: Dict[str, A
 
 def _history_component(hist: Dict[str, Any], suffix: str, month_ctx: Dict[str, Any] | None = None):
     lab = _closed_month_label(month_ctx)
+
+    produto_val = hist.get("produto")
+    produto_exib = produto_val if str(produto_val or "").strip() else "-"
+
     return html.Div(
         [
             html.Div("Detalhes (Inteligência Temporal):", style={"fontWeight": "700", "color": "navy"}),
-            html.Div([html.Span("Produto: ", style={"width": "70px", "display": "inline-block"}), html.Span(hist.get("produto", "Selecione..."), style={"fontStyle": "italic"})]),
+            html.Div("Clique em um produto na tabela", style={"fontSize": "12px", "color": "#666", "marginBottom": "6px"}),
+
+            html.Div(
+                [
+                    html.Span("Produto: ", style={"width": "70px", "display": "inline-block"}),
+                    html.Span(produto_exib, style={"fontStyle": "italic"}),
+                ]
+            ),
             html.Div(
                 [
                     html.Span("Méd 6M: ", style={"width": "70px", "display": "inline-block"}),
@@ -569,13 +580,11 @@ def make_summary_block(suffix: str):
                     ],
                     id=f"kpi-line-{suffix}",
                 ),
-
                 html.Div(
                     'Obs.: o faturamento total inclui itens classificados como "Outros/Desconhecidos".',
                     className="small-muted",
                     style={"marginTop": "6px"},
                 ),
-
                 html.Hr(),
                 dbc.Row(
                     [
@@ -588,7 +597,7 @@ def make_summary_block(suffix: str):
                         ),
                         dbc.Col(
                             _history_component(
-                                {"produto": "Selecione...", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"},
+                                {"produto": "-", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"},
                                 suffix,
                                 month_ctx0,
                             ),
@@ -1077,7 +1086,7 @@ def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, f
             row = df_base.loc[produto_key]
             if isinstance(row, pd.DataFrame):
                 row = row.iloc[0]
-            hist = build_history_payload(row)
+            hist = build_history_payload(row, month_ctx)
             return no_update, _history_component(hist, "t2", month_ctx).children
 
     if trig == "grid-t1" and active_tab == "tab-1" and isinstance(sel1, list) and len(sel1) > 0:
@@ -1087,42 +1096,14 @@ def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, f
             row = df_base.loc[produto_key]
             if isinstance(row, pd.DataFrame):
                 row = row.iloc[0]
-            hist = build_history_payload(row)
+            hist = build_history_payload(row, month_ctx)
             return _history_component(hist, "t1", month_ctx).children, no_update
         
     if trig in ("mes_ref", "forn", "fab", "cat", "tabs"):
-        # auto-seleciona 1ª linha da aba ativa para deixar intuitivo
-        base_row = None
-        if active_tab == "tab-1" and rowData1:
-            base_row = rowData1[0]
-        elif active_tab == "tab-2" and rowData2:
-            base_row = rowData2[0]
-
-        if base_row:
-            produto_key = base_row.get("_produto_key") or base_row.get("id")
-            if produto_key and produto_key in df_base.index:
-                row = df_base.loc[produto_key]
-                if isinstance(row, pd.DataFrame):
-                    row = row.iloc[0]
-                hist = build_history_payload(row)
-                # atualiza os dois painéis para manter consistência
-                return (
-                    _history_component(hist, "t1", month_ctx).children,
-                    _history_component(hist, "t2", month_ctx).children,
-                )
-
-        # fallback se não tiver rowData ainda
+        empty_hist = {"produto": "-", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"}
         return (
-            _history_component(
-                {"produto": "Clique em um produto na tabela", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"},
-                "t1",
-                month_ctx,
-            ).children,
-            _history_component(
-                {"produto": "Clique em um produto na tabela", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"},
-                "t2",
-                month_ctx,
-            ).children,
+            _history_component(empty_hist, "t1", month_ctx).children,
+            _history_component(empty_hist, "t2", month_ctx).children,
         )
 
     if df_base is None or df_base.empty:
@@ -1135,7 +1116,7 @@ def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, f
             row = df_base.loc[produto_key]
             if isinstance(row, pd.DataFrame):
                 row = row.iloc[0]
-            return _history_component(build_history_payload(row), "t1", month_ctx).children, no_update
+            return _history_component(build_history_payload(row, month_ctx), "t1", month_ctx).children, no_update
 
     if trig == "grid-t2" and active_tab == "tab-2" and isinstance(cell2, dict):
         row_grid = _row_from_event(cell2, rowData2)
@@ -1144,7 +1125,7 @@ def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, f
             row = df_base.loc[produto_key]
             if isinstance(row, pd.DataFrame):
                 row = row.iloc[0]
-            return no_update, _history_component(build_history_payload(row), "t2", month_ctx).children
+            return no_update, _history_component(build_history_payload(row, month_ctx), "t2", month_ctx).children
 
     return no_update, no_update
 
