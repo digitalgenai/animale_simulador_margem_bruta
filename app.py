@@ -592,8 +592,8 @@ def make_summary_block(suffix: str):
                     ],
                     id=f"kpi-line-{suffix}",
                 ),
-                html.Div(
-                    'Obs.: o faturamento total inclui itens classificados como "Outros/Desconhecidos".',
+              html.Div(
+                    'Obs.: O faturamento total e a Margem Média incluem itens classificados como "Outros/Desconhecidos".',
                     className="small-muted",
                     style={"marginTop": "6px"},
                 ),
