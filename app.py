@@ -6,6 +6,7 @@ from openpyxl import load_workbook
 import logging
 import re
 import threading
+from datetime import datetime
 from typing import Any, Dict, List, Tuple
 
 import pandas as pd
@@ -33,9 +34,11 @@ logger = logging.getLogger("simulador_web")
 
 # =============================================================================
 # Cache de datasets por Mês/Ano (evita reload em toda interação)
+# TTL de 30 minutos: garante que dados do mês vigente sejam sempre frescos
 # =============================================================================
 _DATA_LOCK = threading.Lock()
-_DATA_CACHE: Dict[str, Tuple[pd.DataFrame, Dict[str, float], Dict[str, float], Dict[str, float], List[str], List[str], Dict[str, Any]]] = {}
+_CACHE_TTL_SECONDS = 1800  # 30 minutos
+_DATA_CACHE: Dict[str, Tuple[Tuple, datetime]] = {}
 
 
 def _parse_ym_safe(s: str | None) -> Tuple[int | None, int | None]:
@@ -54,8 +57,12 @@ def _get_data_for_mes_ref(mes_ref_safe: str | None, force_reload: bool = False):
         if force_reload:
             _DATA_CACHE.pop(key, None)
 
-        if key in _DATA_CACHE:
-            return _DATA_CACHE[key]
+        cached = _DATA_CACHE.get(key)
+        if cached:
+            result, loaded_at = cached
+            if (datetime.now() - loaded_at).total_seconds() < _CACHE_TTL_SECONDS:
+                return result
+            _DATA_CACHE.pop(key, None)
 
         # carrega ainda sob lock (evita corrida em callbacks paralelos)
         if key == "__DEFAULT__":
@@ -70,8 +77,9 @@ def _get_data_for_mes_ref(mes_ref_safe: str | None, force_reload: bool = False):
                 df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data(ref_year=y, ref_month=m)
                 month_ctx = get_month_context()
 
-        _DATA_CACHE[key] = (df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global, month_ctx)
-        return _DATA_CACHE[key]
+        result = (df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global, month_ctx)
+        _DATA_CACHE[key] = (result, datetime.now())
+        return result
 
 
 # --- Carga default (para montar layout inicial) ---
@@ -631,6 +639,7 @@ app.layout = dbc.Container(
         dcc.Store(id="store-sim", storage_type="session", data=store_sim_default),
         dcc.Store(id="store-selected", storage_type="session", data={"produto_key": None, "area": ""}),
         dcc.Download(id="download-excel"),
+        dcc.Interval(id="interval-refresh", interval=_CACHE_TTL_SECONDS * 1000, n_intervals=0),
 
         dbc.Row(
             dbc.Col(
@@ -897,6 +906,22 @@ app.layout = dbc.Container(
 
 # =============================================================================
 # Callbacks: atualizar listas ao mudar Mês/Ano
+# =============================================================================
+# Atualiza opções do seletor Mês/Ano a cada TTL (garante novos meses apareçam)
+# =============================================================================
+@app.callback(
+    Output("mes_ref", "options"),
+    Input("interval-refresh", "n_intervals"),
+)
+def refresh_mes_ref_options(_):
+    _, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(None, force_reload=True)
+    available_safe = month_ctx.get("available_labels_safe") or []
+    available_human = month_ctx.get("available_labels_human") or []
+    if available_safe and available_human and len(available_safe) == len(available_human):
+        return [{"label": h, "value": s} for s, h in zip(available_safe, available_human)]
+    return no_update
+
+
 # =============================================================================
 @app.callback(
     Output("forn", "options"),

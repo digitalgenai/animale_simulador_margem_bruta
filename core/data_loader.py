@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
+from datetime import datetime
 from typing import Dict, Tuple, List, Optional
 
 import numpy as np
@@ -62,8 +63,9 @@ _MONTH_CTX: Dict[str, object] = {
 _PT_ABBR = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 _PT_ABBR_SET = {m.lower() for m in _PT_ABBR}
 
-# Cache simples dos meses disponíveis (pra não ficar fazendo DISTINCT sempre)
-_AVAILABLE_MONTHS_CACHE: Dict[str, List[pd.Timestamp]] = {}
+# Cache dos meses disponíveis com TTL de 30 minutos
+_AVAILABLE_MONTHS_CACHE_TTL = 1800  # segundos
+_AVAILABLE_MONTHS_CACHE: Dict[str, Tuple[List[pd.Timestamp], datetime]] = {}
 
 # Cache de metadados do schema coleta (tabelas/colunas)
 _COLETA_TABLES_CACHE: Dict[str, Dict[str, str]] = {}  # schema -> {lower_name: actual_name}
@@ -220,8 +222,11 @@ def _clamp_month(target: pd.Timestamp, available: List[pd.Timestamp]) -> pd.Time
 
 
 def _fetch_available_months(engine: Engine, full_table: str) -> List[pd.Timestamp]:
-    if full_table in _AVAILABLE_MONTHS_CACHE and _AVAILABLE_MONTHS_CACHE[full_table]:
-        return _AVAILABLE_MONTHS_CACHE[full_table]
+    cached = _AVAILABLE_MONTHS_CACHE.get(full_table)
+    if cached:
+        months, loaded_at = cached
+        if months and (datetime.now() - loaded_at).total_seconds() < _AVAILABLE_MONTHS_CACHE_TTL:
+            return months
 
     sql = text(
         f"""
@@ -233,12 +238,12 @@ def _fetch_available_months(engine: Engine, full_table: str) -> List[pd.Timestam
     )
     dfm = pd.read_sql(sql, engine)
     if dfm.empty or "mes" not in dfm.columns:
-        _AVAILABLE_MONTHS_CACHE[full_table] = []
+        _AVAILABLE_MONTHS_CACHE[full_table] = ([], datetime.now())
         return []
 
     months = pd.to_datetime(dfm["mes"], errors="coerce").dropna().dt.to_period("M").dt.to_timestamp().dt.normalize()
     out = sorted(months.unique().tolist())
-    _AVAILABLE_MONTHS_CACHE[full_table] = out
+    _AVAILABLE_MONTHS_CACHE[full_table] = (out, datetime.now())
     return out
 
 
