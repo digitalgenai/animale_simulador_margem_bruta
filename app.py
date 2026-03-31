@@ -50,8 +50,8 @@ def _parse_ym_safe(s: str | None) -> Tuple[int | None, int | None]:
     return int(m.group(1)), int(m.group(2))
 
 
-def _get_data_for_mes_ref(mes_ref_safe: str | None, force_reload: bool = False):
-    key = str(mes_ref_safe) if mes_ref_safe else "__DEFAULT__"
+def _get_data_for_mes_ref(mes_ref_safe: str | None, force_reload: bool = False, mes_inicio_safe: str | None = None):
+    key = f"{mes_ref_safe or '__DEFAULT__'}|{mes_inicio_safe or ''}"
 
     with _DATA_LOCK:
         if force_reload:
@@ -65,21 +65,74 @@ def _get_data_for_mes_ref(mes_ref_safe: str | None, force_reload: bool = False):
             _DATA_CACHE.pop(key, None)
 
         # carrega ainda sob lock (evita corrida em callbacks paralelos)
-        if key == "__DEFAULT__":
-            df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data()
+        y_ini, m_ini = _parse_ym_safe(mes_inicio_safe) if mes_inicio_safe else (None, None)
+
+        if mes_ref_safe is None or mes_ref_safe == "__DEFAULT__":
+            df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data(
+                ref_start_year=y_ini, ref_start_month_num=m_ini
+            )
             month_ctx = get_month_context()
         else:
             y, m = _parse_ym_safe(mes_ref_safe)
             if y is None or m is None:
-                df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data()
+                df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data(
+                    ref_start_year=y_ini, ref_start_month_num=m_ini
+                )
                 month_ctx = get_month_context()
             else:
-                df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data(ref_year=y, ref_month=m)
+                df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data(
+                    ref_year=y, ref_month=m, ref_start_year=y_ini, ref_start_month_num=m_ini
+                )
                 month_ctx = get_month_context()
 
         result = (df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global, month_ctx)
         _DATA_CACHE[key] = (result, datetime.now())
         return result
+
+
+def _get_available_safe() -> list:
+    with _DATA_LOCK:
+        for cached_val in _DATA_CACHE.values():
+            result, _ = cached_val
+            ctx_candidate = result[6] if result and len(result) > 6 else {}
+            avail = (ctx_candidate or {}).get("available_labels_safe")
+            if avail:
+                return list(avail)
+    return list(month_ctx0.get("available_labels_safe") or [])
+
+
+def _resolve_mes_ref(periodo_tipo: str | None, mes_ref: str | None, mes_fim: str | None) -> str | None:
+    """Retorna o mês final efetivo: quando Personalizado usa mes_fim, senão usa mes_ref."""
+    if periodo_tipo == "personalizado" and mes_fim:
+        return mes_fim
+    return mes_ref
+
+
+def _resolve_mes_inicio(periodo_tipo: str | None, mes_ref_safe: str | None, mes_inicio_safe: str | None, available_safe: list) -> str | None:
+    """Deriva mes_inicio_safe a partir do tipo de período selecionado."""
+    if not periodo_tipo or periodo_tipo in ("mes_unico", "hoje"):
+        return None
+    if periodo_tipo == "personalizado":
+        return mes_inicio_safe
+    if periodo_tipo in ("mes_anterior", "ontem"):
+        if not mes_ref_safe or not available_safe:
+            return None
+        try:
+            idx = list(available_safe).index(mes_ref_safe)
+        except ValueError:
+            return None
+        start_idx = max(0, idx - 1)
+        return available_safe[start_idx]
+    n_map = {"ultimos_3": 3, "ultimos_6": 6, "ultimos_12": 12}
+    n = n_map.get(str(periodo_tipo), 1)
+    if not mes_ref_safe or not available_safe:
+        return None
+    try:
+        idx = list(available_safe).index(mes_ref_safe)
+    except ValueError:
+        return None
+    start_idx = max(0, idx - (n - 1))
+    return available_safe[start_idx]
 
 
 # --- Carga default (para montar layout inicial) ---
@@ -456,9 +509,21 @@ def _get_ref_month_ts(month_ctx: Dict[str, Any] | None) -> pd.Timestamp | None:
 
 
 def _closed_month_label(month_ctx: Dict[str, Any] | None) -> str:
-    ts = _get_ref_month_ts(month_ctx)
-    if isinstance(ts, pd.Timestamp):
-        return f"{_PT_ABBR[ts.month - 1]}/{ts.year}"
+    ctx = month_ctx or {}
+    ts_end = _get_ref_month_ts(ctx)
+
+    ref_start_safe = ctx.get("ref_start_month_safe")
+    if ref_start_safe:
+        y_s, m_s = _parse_ym_safe(str(ref_start_safe))
+        if y_s and m_s:
+            ts_start = pd.Timestamp(year=y_s, month=m_s, day=1)
+            if isinstance(ts_end, pd.Timestamp) and ts_start != ts_end:
+                start_label = f"{_PT_ABBR[ts_start.month - 1]}/{ts_start.year}"
+                end_label = f"{_PT_ABBR[ts_end.month - 1]}/{ts_end.year}"
+                return f"{start_label}-{end_label}"
+
+    if isinstance(ts_end, pd.Timestamp):
+        return f"{_PT_ABBR[ts_end.month - 1]}/{ts_end.year}"
     return "Mês"
 
 
@@ -525,7 +590,6 @@ store_sim_default = {"manual": {}, "conc": {}}
 
 # ColumnDefs
 coldefs_t1 = [
-    {"headerName": "SKU", "field": "SKU", "width": 95},
     {"headerName": "Cod. Barras", "field": "Cod_Barras", "width": 130},
     {"headerName": "Produto", "field": "Produto", "width": 260},
     {"headerName": "ABC", "field": "ABC", "width": 70},
@@ -537,8 +601,8 @@ coldefs_t1 = [
     {"headerName": "Marg %", "field": "Marg %", "width": 95},
     {"headerName": "PETZ", "field": "PETZ", "width": 110},
     {"headerName": "PROCAMPO", "field": "PROCAMPO", "width": 110},
-    {"headerName": "Dif % (Menor)", "field": "Dif % (Menor)", "width": 110},
-    {"headerName": "Sim Preço", "field": "Sim Preço", "width": 110},
+    {"headerName": "Dif % (menor preço)", "field": "Dif % (Menor)", "width": 120},
+    {"headerName": "Menor preço", "field": "Sim Preço", "width": 110},
     {"headerName": "Sim Marg", "field": "Sim Marg", "width": 95},
     {"headerName": "Sim Custo Nec", "field": "Sim Custo Nec", "width": 120},
 ]
@@ -667,6 +731,48 @@ app.layout = dbc.Container(
                                         style={"width": "160px", "display": "inline-block", "verticalAlign": "middle"},
                                         clearable=False,
                                     ),
+                                    html.Span("  Período: ", style={"fontWeight": "700", "marginLeft": "10px"}),
+                                    dcc.Dropdown(
+                                        id="periodo_tipo",
+                                        options=[
+                                            {"label": "Últimos 3 meses", "value": "ultimos_3"},
+                                            {"label": "Últimos 6 meses", "value": "ultimos_6"},
+                                            {"label": "Últimos 12 meses", "value": "ultimos_12"},
+                                            {"label": "Hoje", "value": "hoje"},
+                                            {"label": "Ontem", "value": "ontem"},
+                                            {"label": "Mês Atual", "value": "mes_unico"},
+                                            {"label": "Mês Anterior", "value": "mes_anterior"},
+                                            {"label": "Personalizado", "value": "personalizado"},
+                                        ],
+                                        value="mes_unico",
+                                        clearable=False,
+                                        style={"width": "185px", "display": "inline-block", "verticalAlign": "middle"},
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.Span("Data Início", style={"fontSize": "12px", "color": "#555"}),
+                                            dcc.Dropdown(
+                                                id="mes_inicio",
+                                                options=MES_REF_OPTIONS,
+                                                value=None,
+                                                placeholder="Selecione...",
+                                                clearable=True,
+                                                style={"width": "140px", "display": "inline-block", "verticalAlign": "middle"},
+                                            ),
+                                            html.Span("à", style={"fontSize": "13px", "color": "#555", "margin": "0 2px"}),
+                                            html.Span("Data Fim", style={"fontSize": "12px", "color": "#555"}),
+                                            dcc.Dropdown(
+                                                id="mes_fim",
+                                                options=MES_REF_OPTIONS,
+                                                value=DEFAULT_MES_REF_SAFE,
+                                                placeholder="Selecione...",
+                                                clearable=False,
+                                                style={"width": "140px", "display": "inline-block", "verticalAlign": "middle"},
+                                            ),
+                                        ],
+                                        id="div-mes-inicio",
+                                        style={"display": "none", "alignItems": "center", "gap": "5px"},
+                                    ),
 
                                     html.Span(f"  |  {COLUNA_AGREGACAO_PRINCIPAL}: ", style={"fontWeight": "700", "marginLeft": "10px"}),
                                     dcc.Dropdown(
@@ -716,7 +822,7 @@ app.layout = dbc.Container(
                                 style={"display": "flex", "gap": "10px", "alignItems": "center", "flexWrap": "wrap"},
                             ),
                             html.Div(
-                                "Objetivo das Abas 1 e 2: replicar o simulador desktop com popups via duplo clique.",
+                                "",
                                 className="small-muted",
                                 style={"marginTop": "8px"},
                             ),
@@ -920,7 +1026,19 @@ app.layout = dbc.Container(
 # Atualiza opções do seletor Mês/Ano a cada TTL (garante novos meses apareçam)
 # =============================================================================
 @app.callback(
+    Output("div-mes-inicio", "style"),
+    Input("periodo_tipo", "value"),
+)
+def toggle_mes_inicio(periodo_tipo):
+    if periodo_tipo == "personalizado":
+        return {"display": "inline-flex", "alignItems": "center", "gap": "5px", "marginLeft": "5px"}
+    return {"display": "none"}
+
+
+@app.callback(
     Output("mes_ref", "options"),
+    Output("mes_inicio", "options"),
+    Output("mes_fim", "options"),
     Input("interval-refresh", "n_intervals"),
 )
 def refresh_mes_ref_options(_):
@@ -928,8 +1046,9 @@ def refresh_mes_ref_options(_):
     available_safe = month_ctx.get("available_labels_safe") or []
     available_human = month_ctx.get("available_labels_human") or []
     if available_safe and available_human and len(available_safe) == len(available_human):
-        return [{"label": h, "value": s} for s, h in zip(available_safe, available_human)]
-    return no_update
+        opts = [{"label": h, "value": s} for s, h in zip(available_safe, available_human)]
+        return opts, opts, opts
+    return no_update, no_update, no_update
 
 
 # =============================================================================
@@ -966,9 +1085,15 @@ def _set_header(coldefs, field, header):
     Output("grid-t2", "columnDefs"),
     Output("grid-t3", "columnDefs"),
     Input("mes_ref", "value"),
+    Input("periodo_tipo", "value"),
+    State("mes_inicio", "value"),
+    State("mes_fim", "value"),
 )
-def update_grid_headers(mes_ref):
-    _, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(mes_ref)
+def update_grid_headers(mes_ref, periodo_tipo, mes_inicio, mes_fim):
+    available = _get_available_safe()
+    ref_efetivo = _resolve_mes_ref(periodo_tipo, mes_ref, mes_fim)
+    mes_ini = _resolve_mes_inicio(periodo_tipo, ref_efetivo, mes_inicio, available)
+    _, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, mes_inicio_safe=mes_ini)
     lab = _closed_month_label(month_ctx)
 
     t1 = _set_header(coldefs_t1, "Qtd Ref", f"Qtd {lab}")
@@ -1040,9 +1165,14 @@ def on_cat_t3_change(mes_ref, cat_t3):
     Input("cat_t3", "value"),
     Input("forn_t3", "value"),
     Input("store-sim", "data"),
+    Input("periodo_tipo", "value"),
+    State("mes_inicio", "value"),
+    State("mes_fim", "value"),
 )
-def refresh_all(active_tab, mes_ref, forn, fab, cat, meta_t1, meta_t2, cat_t3, forn_t3, sim_store):
-    df_base, bench_ano, _, _, _, _, month_ctx = _get_data_for_mes_ref(mes_ref, force_reload=False)
+def refresh_all(active_tab, mes_ref, forn, fab, cat, meta_t1, meta_t2, cat_t3, forn_t3, sim_store, periodo_tipo, mes_inicio_val, mes_fim_val):
+    ref_efetivo = _resolve_mes_ref(periodo_tipo, mes_ref, mes_fim_val)
+    mes_ini = _resolve_mes_inicio(periodo_tipo, ref_efetivo, mes_inicio_val, _get_available_safe())
+    df_base, bench_ano, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, force_reload=False, mes_inicio_safe=mes_ini)
 
     meta_t1_atual = _safe_float_percent(meta_t1, 0.30)
     meta_t2_atual = _safe_float_percent(meta_t2, 0.00)
@@ -1118,11 +1248,16 @@ def fit_columns_on_visible_tab(active_tab):
     Input("fab", "value"),
     Input("cat", "value"),
     Input("tabs", "active_tab"),
+    State("periodo_tipo", "value"),
+    State("mes_inicio", "value"),
+    State("mes_fim", "value"),
 )
-def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, fab, cat, active_tab):
+def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, fab, cat, active_tab, periodo_tipo, mes_inicio_val, mes_fim_val):
     hist_default = {"produto": "Selecione...", "cod_barras": "-", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"}
 
-    df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(mes_ref)
+    ref_efetivo = _resolve_mes_ref(periodo_tipo, mes_ref, mes_fim_val)
+    mes_ini = _resolve_mes_inicio(periodo_tipo, ref_efetivo, mes_inicio_val, _get_available_safe())
+    df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, mes_inicio_safe=mes_ini)
 
     trig = ctx.triggered_id
 
@@ -1448,11 +1583,16 @@ def update_mkt_estimate(delta, selected, rowData):
     State("grid-t1", "rowData"),
     State("grid-t2", "rowData"),
     State("grid-t3", "rowData"),
+    State("periodo_tipo", "value"),
+    State("mes_inicio", "value"),
+    State("mes_fim", "value"),
     prevent_initial_call=True,
 )
-def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_store, cs_t1, cs_t2, cs_t3, rd_t1, rd_t2, rd_t3):
+def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_store, cs_t1, cs_t2, cs_t3, rd_t1, rd_t2, rd_t3, periodo_tipo, mes_inicio_val, mes_fim_val):
     try:
-        df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(mes_ref)
+        ref_efetivo = _resolve_mes_ref(periodo_tipo, mes_ref, mes_fim_val)
+        mes_ini = _resolve_mes_inicio(periodo_tipo, ref_efetivo, mes_inicio_val, _get_available_safe())
+        df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, mes_inicio_safe=mes_ini)
         if df_base is None or df_base.empty:
             return no_update
 

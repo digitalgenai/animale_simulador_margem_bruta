@@ -58,6 +58,7 @@ _MONTH_CTX: Dict[str, object] = {
     "available_months_ts": None,  # List[pd.Timestamp] (meses existentes no dataset)
     "available_labels_safe": None,  # List[str] "YYYY_MM"
     "available_labels_human": None,  # List[str] "Jan/2026"
+    "ref_start_month_safe": None,  # "YYYY_MM" do início do range de referência
 }
 
 _PT_ABBR = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
@@ -582,6 +583,8 @@ def load_base_data(
     n_months: Optional[int] = None,
     ref_year: Optional[int] = None,
     ref_month: Optional[int] = None,
+    ref_start_year: Optional[int] = None,
+    ref_start_month_num: Optional[int] = None,
 ) -> Tuple[
     pd.DataFrame,
     Dict[str, float],
@@ -637,6 +640,7 @@ def load_base_data(
             "closed_month": ref_month_start,
             "ref_month_safe": ref_month_start.strftime("%Y_%m"),
             "closed_month_safe": ref_month_start.strftime("%Y_%m"),
+            "ref_start_month_safe": None,  # será atualizado após computar ref_labels_safe
             "n": n,
             "months_ts": months_ts,
             "labels_safe": labels_safe,
@@ -894,22 +898,43 @@ def load_base_data(
     df_base["Margem_Media_Trimestre"] = _safe_div(df_base["Valor_Margem_Total_Trimestre"], df_base["Fat_Total_Trimestre"])
 
     mes_ref_safe = labels_safe[-1]
-    fat_ref = f"Fat_{mes_ref_safe}"
-    marg_ref = f"Marg_Val_{mes_ref_safe}"
-    qtd_ref = f"Qtd_{mes_ref_safe}"
 
     mes_ref_label = safe_to_legacy.get(mes_ref_safe, mes_ref_safe)
     logger.info("mes_ref_safe(MÊS_SELECIONADO)= %s | label=%s", mes_ref_safe, mes_ref_label)
 
-    missing = [c for c in (fat_ref, marg_ref, qtd_ref) if c not in df_base.columns]
-    if missing:
-        raise RuntimeError(f"Colunas do mês-ref ausentes: {missing}. mes_ref_safe={mes_ref_safe}")
+    # Determinar range de referência
+    if ref_start_year is not None and ref_start_month_num is not None:
+        try:
+            ref_start_ts = pd.Timestamp(ref_start_year, ref_start_month_num, 1).normalize()
+        except Exception:
+            ref_start_ts = ref_month_start
+        ref_labels_safe = [
+            m.strftime("%Y_%m")
+            for m in months_ts
+            if ref_start_ts <= m <= ref_month_start
+        ]
+        if not ref_labels_safe:
+            ref_labels_safe = [mes_ref_safe]
+    else:
+        ref_start_ts = ref_month_start
+        ref_labels_safe = [mes_ref_safe]
 
-    df_base["Qtd_Ref"] = df_base[qtd_ref].fillna(0.0).round().astype(int)
-    df_base["Preco_Atual"] = _safe_div(df_base[fat_ref], df_base[qtd_ref])
-    df_base["Custo"] = _safe_div(df_base[fat_ref] - df_base[marg_ref], df_base[qtd_ref])
-    df_base["Marg_Unit"] = _safe_div(df_base[marg_ref], df_base[qtd_ref])
-    df_base["Marg_Perc"] = _safe_div(df_base[marg_ref], df_base[fat_ref])
+    n_ref_months = max(len(ref_labels_safe), 1)
+    ref_start_month_safe = ref_labels_safe[0]
+
+    _ensure_columns(df_base, [f"Fat_{m}" for m in ref_labels_safe], 0.0)
+    _ensure_columns(df_base, [f"Marg_Val_{m}" for m in ref_labels_safe], 0.0)
+    _ensure_columns(df_base, [f"Qtd_{m}" for m in ref_labels_safe], 0.0)
+
+    fat_ref_sum = df_base[[f"Fat_{m}" for m in ref_labels_safe]].sum(axis=1)
+    marg_ref_sum = df_base[[f"Marg_Val_{m}" for m in ref_labels_safe]].sum(axis=1)
+    qtd_ref_sum = df_base[[f"Qtd_{m}" for m in ref_labels_safe]].sum(axis=1)
+
+    df_base["Qtd_Ref"] = qtd_ref_sum.fillna(0.0).round().astype(int)
+    df_base["Preco_Atual"] = _safe_div(fat_ref_sum, qtd_ref_sum)
+    df_base["Custo"] = _safe_div(fat_ref_sum - marg_ref_sum, qtd_ref_sum)
+    df_base["Marg_Unit"] = _safe_div(marg_ref_sum, qtd_ref_sum)
+    df_base["Marg_Perc"] = _safe_div(marg_ref_sum, fat_ref_sum)
 
     df_base["Qtd Nov"] = df_base["Qtd_Ref"]
     df_base["Preço Atual"] = df_base["Preco_Atual"]
@@ -919,10 +944,12 @@ def load_base_data(
 
     df_base["Preco_Mais_Recente"] = df_base["Preco_Atual"]
     df_base["Custo_Mais_Recente"] = df_base["Custo"]
-    df_base["Qtd_Media_Mensal"] = df_base["Qtd_Ref"]
+    df_base["Qtd_Media_Mensal"] = (qtd_ref_sum / n_ref_months).fillna(0.0)
 
-    df_base["Fat_Ref"] = df_base[fat_ref]
-    df_base["Marg_Val_Ref"] = df_base[marg_ref]
+    df_base["Fat_Ref"] = fat_ref_sum
+    df_base["Marg_Val_Ref"] = marg_ref_sum
+
+    _MONTH_CTX["ref_start_month_safe"] = ref_start_month_safe
 
     df_base["Curva_ABC"] = _calc_curva_abc(df_base, "Fat_Ref")
     df_base["ABC"] = df_base["Curva_ABC"]
