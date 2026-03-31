@@ -6,6 +6,8 @@ services:
     container_name: simulador-web
     ports:
       - "8050:8050"
+    env_file:
+      - .env
     environment:
       - BASE_SIMULADOR_PATH=/data/base_simulador.xlsx
       - PYTHONUNBUFFERED=1

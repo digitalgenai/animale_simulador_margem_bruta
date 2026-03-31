@@ -372,6 +372,8 @@ def _history_component(hist: Dict[str, Any], suffix: str, month_ctx: Dict[str, A
 
     produto_val = hist.get("produto")
     produto_exib = produto_val if str(produto_val or "").strip() else "-"
+    cod_barras_val = hist.get("cod_barras", "-")
+    cod_barras_exib = cod_barras_val if str(cod_barras_val or "").strip() else "-"
 
     return html.Div(
         [
@@ -380,7 +382,13 @@ def _history_component(hist: Dict[str, Any], suffix: str, month_ctx: Dict[str, A
 
             html.Div(
                 [
-                    html.Span("Produto: ", style={"width": "70px", "display": "inline-block"}),
+                    html.Span("Cod. Barras: ", style={"width": "90px", "display": "inline-block"}),
+                    html.Span(cod_barras_exib, style={"fontFamily": "monospace"}),
+                ]
+            ),
+            html.Div(
+                [
+                    html.Span("Produto: ", style={"width": "90px", "display": "inline-block"}),
                     html.Span(produto_exib, style={"fontStyle": "italic"}),
                 ]
             ),
@@ -518,6 +526,7 @@ store_sim_default = {"manual": {}, "conc": {}}
 # ColumnDefs
 coldefs_t1 = [
     {"headerName": "SKU", "field": "SKU", "width": 95},
+    {"headerName": "Cod. Barras", "field": "Cod_Barras", "width": 130},
     {"headerName": "Produto", "field": "Produto", "width": 260},
     {"headerName": "ABC", "field": "ABC", "width": 70},
     {"headerName": "Categ", "field": "Categ", "width": 140},
@@ -536,6 +545,7 @@ coldefs_t1 = [
 
 coldefs_t2 = [
     {"headerName": "SKU", "field": "SKU", "width": 95},
+    {"headerName": "Cod. Barras", "field": "Cod_Barras", "width": 130},
     {"headerName": "Produto", "field": "Produto", "width": 260},
     {"headerName": "ABC", "field": "ABC", "width": 70},
     {"headerName": "Categ", "field": "Categ", "width": 140},
@@ -617,7 +627,7 @@ def make_summary_block(suffix: str):
                         ),
                         dbc.Col(
                             _history_component(
-                                {"produto": "-", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"},
+                                {"produto": "-", "cod_barras": "-", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"},
                                 suffix,
                                 month_ctx0,
                             ),
@@ -1110,7 +1120,7 @@ def fit_columns_on_visible_tab(active_tab):
     Input("tabs", "active_tab"),
 )
 def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, fab, cat, active_tab):
-    hist_default = {"produto": "Selecione...", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"}
+    hist_default = {"produto": "Selecione...", "cod_barras": "-", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"}
 
     df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(mes_ref)
 
@@ -1137,7 +1147,7 @@ def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, f
             return _history_component(hist, "t1", month_ctx).children, no_update
         
     if trig in ("mes_ref", "forn", "fab", "cat", "tabs"):
-        empty_hist = {"produto": "-", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"}
+        empty_hist = {"produto": "-", "cod_barras": "-", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"}
         return (
             _history_component(empty_hist, "t1", month_ctx).children,
             _history_component(empty_hist, "t2", month_ctx).children,
@@ -1531,4 +1541,6 @@ def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_st
 
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=8050)
+    import os
+    debug = os.getenv("DEBUG", "false").lower() == "true"
+    app.run(debug=debug, host="0.0.0.0", port=8050)

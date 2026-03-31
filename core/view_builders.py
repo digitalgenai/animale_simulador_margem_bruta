@@ -236,10 +236,14 @@ def build_tab1_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
             sim_m = float(meta_t1_atual)
             sim_c = float(calcular_custo_necessario(sim_p, sim_m, area=area))
 
+        cod_barras_raw = row.get("Cod_Barras", "")
+        cod_barras = str(cod_barras_raw).strip() if cod_barras_raw and str(cod_barras_raw).strip() not in ("", "nan", "None") else "-"
+
         rows.append(
             {
                 "id": produto_key,
                 "SKU": fmt_str(row.get("SKU")),
+                "Cod_Barras": cod_barras,
                 "Produto": str(produto_nome),
                 "ABC": fmt_str(row.get("Curva_ABC")),
                 "Categ": fmt_str(row.get("Area")),
@@ -312,10 +316,14 @@ def build_tab2_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
         if sim_conc_ativa:
             delta_str += " (M)"
 
+        cod_barras_raw2 = row.get("Cod_Barras", "")
+        cod_barras2 = str(cod_barras_raw2).strip() if cod_barras_raw2 and str(cod_barras_raw2).strip() not in ("", "nan", "None") else "-"
+
         rows.append(
             {
                 "id": produto_key,
                 "SKU": fmt_str(row.get("SKU")),
+                "Cod_Barras": cod_barras2,
                 "Produto": str(produto_nome),
                 "ABC": fmt_str(row.get("Curva_ABC")),
                 "Categ": fmt_str(row.get("Area")),
@@ -394,8 +402,11 @@ def build_tab3_rows(df_view_atual: pd.DataFrame) -> List[Dict[str, Any]]:
 
 def build_history_payload(row: pd.Series, month_ctx: Dict[str, Any] | None = None) -> Dict[str, Any]:
     produto_nome = str(row.get("Produto", ""))
+    cod_barras_raw = row.get("Cod_Barras", "")
+    cod_barras = str(cod_barras_raw).strip() if cod_barras_raw and str(cod_barras_raw).strip() not in ("", "nan", "None") else "-"
     return {
         "produto": ((produto_nome[:30] + "...") if len(produto_nome) > 30 else produto_nome) or "-",
+        "cod_barras": cod_barras,
         "hist_6m": fmt_media(row.get("Hist_Qtd_Media_6M", 0.0)),
         "hist_3m": fmt_media(row.get("Hist_Qtd_Media_3M", 0.0)),
         "hist_ref": _fmt_int_no_decimals(row.get("Qtd_Media_Mensal", 0.0)),
