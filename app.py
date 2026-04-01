@@ -33,6 +33,29 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("simulador_web")
 
 # =============================================================================
+# Mapeamento Tipo de Embalagem (fonte: tipo_embalagem.xlsx)
+# =============================================================================
+_TIPO_EMBAL_MAP: Dict[str, str] = {}
+_TIPO_EMBAL_OPCOES: List[str] = ["[TODAS]"]
+try:
+    _df_embal = pd.read_excel(
+        r"C:\Users\ranyer.paiva\Downloads\tipo_embalagem.xlsx",
+        sheet_name="Base",
+        dtype=str,
+    )
+    _df_embal.columns = [c.strip() for c in _df_embal.columns]
+    _bc_col = next(c for c in _df_embal.columns if "barras" in c.lower())
+    _tp_col = next(c for c in _df_embal.columns if "embalagem" in c.lower())
+    _df_embal[_bc_col] = _df_embal[_bc_col].str.strip()
+    _df_embal[_tp_col] = _df_embal[_tp_col].str.strip()
+    _TIPO_EMBAL_MAP = dict(zip(_df_embal[_bc_col], _df_embal[_tp_col]))
+    _tipos_unicos = sorted(_df_embal[_tp_col].dropna().unique().tolist())
+    _TIPO_EMBAL_OPCOES = ["[TODAS]"] + _tipos_unicos
+    del _df_embal, _bc_col, _tp_col, _tipos_unicos
+except Exception as _e:
+    logger.warning("Não foi possível carregar tipo_embalagem.xlsx: %s", _e)
+
+# =============================================================================
 # Cache de datasets por Mês/Ano (evita reload em toda interação)
 # TTL de 30 minutos: garante que dados do mês vigente sejam sempre frescos
 # =============================================================================
@@ -84,6 +107,12 @@ def _get_data_for_mes_ref(mes_ref_safe: str | None, force_reload: bool = False, 
                     ref_year=y, ref_month=m, ref_start_year=y_ini, ref_start_month_num=m_ini
                 )
                 month_ctx = get_month_context()
+
+        # Enriquecer com Tipo de Embalagem (join pelo Cod_Barras)
+        if _TIPO_EMBAL_MAP and isinstance(df_base, pd.DataFrame) and not df_base.empty:
+            df_base["Tipo_Embalagem"] = (
+                df_base["Cod_Barras"].map(_TIPO_EMBAL_MAP).fillna("NÃO TEM")
+            )
 
         result = (df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global, month_ctx)
         _DATA_CACHE[key] = (result, datetime.now())
@@ -174,7 +203,7 @@ def _safe_float_percent(val: Any, default: float) -> float:
         return default
 
 
-def _filter_tab12(df_base: pd.DataFrame, forn: str, fab: str, cat: str) -> pd.DataFrame:
+def _filter_tab12(df_base: pd.DataFrame, forn: str, fab: str, cat: str, tipo_embal: str = "[TODAS]") -> pd.DataFrame:
     if df_base is None or df_base.empty:
         return df_base.iloc[0:0].copy() if isinstance(df_base, pd.DataFrame) else pd.DataFrame()
 
@@ -188,6 +217,9 @@ def _filter_tab12(df_base: pd.DataFrame, forn: str, fab: str, cat: str) -> pd.Da
 
     if cat and cat != "[TODAS]":
         df_temp = df_temp[df_temp["Area"] == cat]
+
+    if tipo_embal and tipo_embal != "[TODAS]" and "Tipo_Embalagem" in df_temp.columns:
+        df_temp = df_temp[df_temp["Tipo_Embalagem"] == tipo_embal]
 
     abc_map = {"A": 0, "B": 1, "C": 2}
     abc_order = df_temp["Curva_ABC"].map(abc_map).fillna(3)
@@ -804,6 +836,14 @@ app.layout = dbc.Container(
                                         style={"width": "220px", "display": "inline-block", "verticalAlign": "middle"},
                                         clearable=False,
                                     ),
+                                    html.Span("  Embal: ", style={"fontWeight": "700", "marginLeft": "10px"}),
+                                    dcc.Dropdown(
+                                        id="tipo_embal",
+                                        options=[{"label": x, "value": x} for x in _TIPO_EMBAL_OPCOES],
+                                        value="[TODAS]",
+                                        style={"width": "160px", "display": "inline-block", "verticalAlign": "middle"},
+                                        clearable=False,
+                                    ),
                                     html.Span("  |  ", style={"color": "#999", "marginLeft": "10px"}),
 
                                     html.Span("Sim. Marg (%): ", style={"fontSize": "12px", "color": "navy"}),
@@ -1165,6 +1205,7 @@ def on_cat_t3_change(mes_ref, cat_t3):
     Input("forn", "value"),
     Input("fab", "value"),
     Input("cat", "value"),
+    Input("tipo_embal", "value"),
     Input("meta_t1", "value"),
     Input("meta_t2", "value"),
     Input("cat_t3", "value"),
@@ -1174,7 +1215,7 @@ def on_cat_t3_change(mes_ref, cat_t3):
     State("mes_inicio", "value"),
     State("mes_fim", "value"),
 )
-def refresh_all(active_tab, mes_ref, forn, fab, cat, meta_t1, meta_t2, cat_t3, forn_t3, sim_store, periodo_tipo, mes_inicio_val, mes_fim_val):
+def refresh_all(active_tab, mes_ref, forn, fab, cat, tipo_embal, meta_t1, meta_t2, cat_t3, forn_t3, sim_store, periodo_tipo, mes_inicio_val, mes_fim_val):
     ref_efetivo = _resolve_mes_ref(periodo_tipo, mes_ref, mes_fim_val)
     mes_ini = _resolve_mes_inicio(periodo_tipo, ref_efetivo, mes_inicio_val, _get_available_safe())
     df_base, bench_ano, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, force_reload=False, mes_inicio_safe=mes_ini)
@@ -1182,7 +1223,7 @@ def refresh_all(active_tab, mes_ref, forn, fab, cat, meta_t1, meta_t2, cat_t3, f
     meta_t1_atual = _safe_float_percent(meta_t1, 0.30)
     meta_t2_atual = _safe_float_percent(meta_t2, 0.00)
 
-    df_view_12 = _filter_tab12(df_base, forn, fab, cat)
+    df_view_12 = _filter_tab12(df_base, forn, fab, cat, tipo_embal or "[TODAS]")
     rows_t1 = build_tab1_rows(df_view_12, sim_store, meta_t1_atual)
     sum_t1 = compute_summary(df_view_12, bench_ano, month_ctx=month_ctx)
 
