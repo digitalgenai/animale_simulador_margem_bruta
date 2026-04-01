@@ -337,6 +337,7 @@ def _apply_excel_formats(ws):
         "Sim Preço (Conc)",
         "Fat Ref",
         "Margem Ref R$",
+        "Faturamento",
     }
 
     percent_cols = {
@@ -348,6 +349,7 @@ def _apply_excel_formats(ws):
         "DELTA ALVO %",
         "Sim Margem (Result)",
         "Margem Ref %",
+        "Fat_Acum_Pct",
     }
 
     integer_cols = {"Qtd Ref"}
@@ -595,6 +597,8 @@ coldefs_t1 = [
     {"headerName": "ABC", "field": "ABC", "width": 70},
     {"headerName": "Categ", "field": "Categ", "width": 140},
     {"headerName": "Qtd Ref", "field": "Qtd Ref", "width": 95},
+    {"headerName": "Faturamento", "field": "Faturamento", "width": 130},
+    {"headerName": "Fat. Acum %", "field": "Fat_Acum_Pct", "width": 110},
     {"headerName": "Preço Atual", "field": "Preço Atual", "width": 110},
     {"headerName": "Custo", "field": "Custo", "width": 110},
     {"headerName": "Marg R$", "field": "Marg R$", "width": 110},
@@ -628,6 +632,7 @@ coldefs_t2 = [
 coldefs_t3 = [
     {"headerName": "Fornecedor", "field": "Fornecedor", "width": 320},
     {"headerName": "Fat Ref", "field": "Fat Ref", "width": 160},
+    {"headerName": "Fat. Acum %", "field": "Fat_Acum_Pct", "width": 120},
     {"headerName": "Margem Ref R$", "field": "Margem Ref R$", "width": 160},
     {"headerName": "Margem Ref %", "field": "Margem Ref %", "width": 140},
 ]
@@ -1634,6 +1639,8 @@ def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_st
         # converte strings formatadas para número real
         numeric_like_cols = {
             "Qtd Ref",
+            "Faturamento",
+            "Fat_Acum_Pct",
             "Preço Atual",
             "Custo",
             "Marg R$",

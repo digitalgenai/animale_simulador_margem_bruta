@@ -239,6 +239,9 @@ def build_tab1_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
         cod_barras_raw = row.get("Cod_Barras", "")
         cod_barras = str(cod_barras_raw).strip() if cod_barras_raw and str(cod_barras_raw).strip() not in ("", "nan", "None") else "-"
 
+        qtd_ref_raw = float(row.get("Qtd_Media_Mensal", 0.0))
+        fat_raw = qtd_ref_raw * p_atual
+
         rows.append(
             {
                 "id": produto_key,
@@ -247,7 +250,7 @@ def build_tab1_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
                 "Produto": str(produto_nome),
                 "ABC": fmt_str(row.get("Curva_ABC")),
                 "Categ": fmt_str(row.get("Area")),
-                "Qtd Ref": fmt_qtd(row.get("Qtd_Media_Mensal", 0.0)),
+                "Qtd Ref": fmt_qtd(qtd_ref_raw),
                 "Preço Atual": fmt_real(p_atual),
                 "Custo": fmt_real(c_atual),
                 "Marg R$": fmt_real(calcular_margem_real_valor(c_atual, p_atual, area=area)),
@@ -258,6 +261,7 @@ def build_tab1_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
                 "Sim Preço": fmt_real(sim_p),
                 "Sim Marg": fmt_perc(sim_m),
                 "Sim Custo Nec": fmt_real(sim_c),
+                "_fat_raw": fat_raw,
                 "_produto_key": produto_key,
                 "_produto_nome": str(produto_nome),
                 "_p_atual": p_atual,
@@ -272,6 +276,15 @@ def build_tab1_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
                 "__is_yellow": (not is_neg) and is_yellow,
             }
         )
+
+    # Faturamento = Qtd Ref × Preço Atual; Fat. Acum % = acumulado sobre o total
+    total_fat = sum(r.get("_fat_raw", 0.0) for r in rows)
+    acum = 0.0
+    for r in rows:
+        fat = r.get("_fat_raw", 0.0)
+        acum += fat
+        r["Faturamento"] = fmt_real(fat)
+        r["Fat_Acum_Pct"] = fmt_perc(acum / total_fat if total_fat > 0 else 0.0)
 
     return rows
 
@@ -393,7 +406,11 @@ def build_tab3_rows(df_view_atual: pd.DataFrame) -> List[Dict[str, Any]]:
 
     temp_rows.sort(key=lambda x: x["_fat_sort"], reverse=True)
 
+    total_fat = sum(r["_fat_sort"] for r in temp_rows)
+    acum = 0.0
     for r in temp_rows:
+        acum += r["_fat_sort"]
+        r["Fat_Acum_Pct"] = fmt_perc(acum / total_fat if total_fat > 0 else 0.0)
         r.pop("_fat_sort", None)
         rows.append(r)
 
