@@ -332,15 +332,17 @@ def build_tab2_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
         cod_barras_raw2 = row.get("Cod_Barras", "")
         cod_barras2 = str(cod_barras_raw2).strip() if cod_barras_raw2 and str(cod_barras_raw2).strip() not in ("", "nan", "None") else "-"
 
+        qtd_ref_raw = float(row.get("Qtd_Media_Mensal", 0.0))
+        fat_raw = qtd_ref_raw * p_atual
+
         rows.append(
             {
                 "id": produto_key,
-                "SKU": fmt_str(row.get("SKU")),
                 "Cod_Barras": cod_barras2,
                 "Produto": str(produto_nome),
                 "ABC": fmt_str(row.get("Curva_ABC")),
                 "Categ": fmt_str(row.get("Area")),
-                "Qtd Ref": fmt_qtd(row.get("Qtd_Media_Mensal", 0.0)),
+                "Qtd Ref": fmt_qtd(qtd_ref_raw),
                 "Preço Atual": fmt_real(p_atual),
                 "Custo": fmt_real(c_atual),
                 "Marg Atual %": fmt_perc(marg_real),
@@ -361,8 +363,17 @@ def build_tab2_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
                 "_area": area,
                 "__is_neg": is_neg,
                 "__is_yellow": (not is_neg) and is_yellow,
+                "_fat_raw": fat_raw,
             }
         )
+
+    total_fat = sum(r.get("_fat_raw", 0.0) for r in rows)
+    acum = 0.0
+    for r in rows:
+        fat = r.get("_fat_raw", 0.0)
+        acum += fat
+        r["Faturamento"] = fmt_real(fat)
+        r["Fat_Acum_Pct"] = fmt_perc(acum / total_fat if total_fat > 0 else 0.0)
 
     return rows
 

@@ -134,24 +134,25 @@ def _resolve_mes_ref(periodo_tipo: str | None, mes_ref: str | None, mes_fim: str
     """Retorna o mês final efetivo: quando Personalizado usa mes_fim, senão usa mes_ref."""
     if periodo_tipo == "personalizado" and mes_fim:
         return mes_fim
+    if periodo_tipo in ("mes_anterior", "ontem"):
+        available_safe = _get_available_safe()
+        if not mes_ref or not available_safe:
+            return mes_ref
+        try:
+            idx = list(available_safe).index(mes_ref)
+            start_idx = max(0, idx - 1)
+            return available_safe[start_idx]
+        except ValueError:
+            return mes_ref
     return mes_ref
 
 
 def _resolve_mes_inicio(periodo_tipo: str | None, mes_ref_safe: str | None, mes_inicio_safe: str | None, available_safe: list) -> str | None:
     """Deriva mes_inicio_safe a partir do tipo de período selecionado."""
-    if not periodo_tipo or periodo_tipo in ("mes_unico", "hoje"):
+    if not periodo_tipo or periodo_tipo in ("mes_unico", "hoje", "mes_anterior", "ontem"):
         return None
     if periodo_tipo == "personalizado":
         return mes_inicio_safe
-    if periodo_tipo in ("mes_anterior", "ontem"):
-        if not mes_ref_safe or not available_safe:
-            return None
-        try:
-            idx = list(available_safe).index(mes_ref_safe)
-        except ValueError:
-            return None
-        start_idx = max(0, idx - 1)
-        return available_safe[start_idx]
     n_map = {"ultimos_3": 3, "ultimos_6": 6, "ultimos_12": 12}
     n = n_map.get(str(periodo_tipo), 1)
     if not mes_ref_safe or not available_safe:
@@ -644,12 +645,13 @@ coldefs_t1 = [
 ]
 
 coldefs_t2 = [
-    {"headerName": "SKU", "field": "SKU", "width": 95},
     {"headerName": "Cod. Barras", "field": "Cod_Barras", "width": 130},
     {"headerName": "Produto", "field": "Produto", "width": 260},
     {"headerName": "ABC", "field": "ABC", "width": 70},
     {"headerName": "Categ", "field": "Categ", "width": 140},
     {"headerName": "Qtd Ref", "field": "Qtd Ref", "width": 95},
+    {"headerName": "Faturamento", "field": "Faturamento", "width": 130},
+    {"headerName": "Fat. Acum %", "field": "Fat_Acum_Pct", "width": 110},
     {"headerName": "Preço Atual", "field": "Preço Atual", "width": 110},
     {"headerName": "Custo", "field": "Custo", "width": 110},
     {"headerName": "Marg Atual %", "field": "Marg Atual %", "width": 115},
@@ -665,8 +667,8 @@ coldefs_t3 = [
     {"headerName": "Fornecedor", "field": "Fornecedor", "width": 320},
     {"headerName": "Fat Ref", "field": "Fat Ref", "width": 160},
     {"headerName": "Fat. Acum %", "field": "Fat_Acum_Pct", "width": 120},
-    {"headerName": "Margem Ref R$", "field": "Margem Ref R$", "width": 160},
-    {"headerName": "Margem Ref %", "field": "Margem Ref %", "width": 140},
+    {"headerName": "R$ Margem", "field": "Margem Ref R$", "width": 160},
+    {"headerName": "% Margem", "field": "Margem Ref %", "width": 140},
 ]
 
 
@@ -757,115 +759,135 @@ app.layout = dbc.Container(
                 dbc.Card(
                     dbc.CardBody(
                         [
-                            html.Div(
-                                [
-                                    html.Span("Mês/Ano: ", style={"fontWeight": "700"}),
-                                    dcc.Dropdown(
-                                        id="mes_ref",
-                                        options=MES_REF_OPTIONS,
-                                        value=DEFAULT_MES_REF_SAFE,
-                                        placeholder="Selecione...",
-                                        style={"width": "160px", "display": "inline-block", "verticalAlign": "middle"},
-                                        clearable=False,
-                                    ),
-                                    html.Span("  Período: ", style={"fontWeight": "700", "marginLeft": "10px"}),
-                                    dcc.Dropdown(
-                                        id="periodo_tipo",
-                                        options=[
-                                            {"label": "Últimos 3 meses", "value": "ultimos_3"},
-                                            {"label": "Últimos 6 meses", "value": "ultimos_6"},
-                                            {"label": "Últimos 12 meses", "value": "ultimos_12"},
-                                            {"label": "Hoje", "value": "hoje"},
-                                            {"label": "Ontem", "value": "ontem"},
-                                            {"label": "Mês Atual", "value": "mes_unico"},
-                                            {"label": "Mês Anterior", "value": "mes_anterior"},
-                                            {"label": "Personalizado", "value": "personalizado"},
-                                        ],
-                                        value="mes_unico",
-                                        clearable=False,
-                                        style={"width": "185px", "display": "inline-block", "verticalAlign": "middle"},
-                                    ),
-                                    html.Div(
-                                        [
-                                            html.Span("Data Início", style={"fontSize": "12px", "color": "#555"}),
-                                            dcc.Dropdown(
-                                                id="mes_inicio",
-                                                options=MES_REF_OPTIONS,
-                                                value=None,
-                                                placeholder="Selecione...",
-                                                clearable=True,
-                                                style={"width": "140px", "display": "inline-block", "verticalAlign": "middle"},
-                                            ),
-                                            html.Span("à", style={"fontSize": "13px", "color": "#555", "margin": "0 2px"}),
-                                            html.Span("Data Fim", style={"fontSize": "12px", "color": "#555"}),
-                                            dcc.Dropdown(
-                                                id="mes_fim",
-                                                options=MES_REF_OPTIONS,
-                                                value=DEFAULT_MES_REF_SAFE,
-                                                placeholder="Selecione...",
-                                                clearable=False,
-                                                style={"width": "140px", "display": "inline-block", "verticalAlign": "middle"},
-                                            ),
-                                        ],
-                                        id="div-mes-inicio",
-                                        style={"display": "none", "alignItems": "center", "gap": "5px"},
-                                    ),
+                            html.Div([
+                                # Linha 1: Principal
+                                dbc.Row([
+                                    dbc.Col([
+                                        html.Div("Período de Análise", className="small text-muted fw-bold mb-1"),
+                                        dcc.Dropdown(
+                                            id="periodo_tipo",
+                                            options=[
+                                                {"label": "Últimos 3 meses", "value": "ultimos_3"},
+                                                {"label": "Últimos 6 meses", "value": "ultimos_6"},
+                                                {"label": "Últimos 12 meses", "value": "ultimos_12"},
+                                                {"label": "Mês Atual", "value": "mes_unico"},
+                                                {"label": "Mês Anterior", "value": "mes_anterior"},
+                                                {"label": "Personalizado", "value": "personalizado"},
+                                            ],
+                                            value="mes_unico",
+                                            clearable=False,
+                                            searchable=True,
+                                            className="shadow-sm"
+                                        )
+                                    ], md=4, lg=2, className="mb-3"),
+                                    dbc.Col([
+                                        html.Div("Mês/Ano Principal", className="small text-muted fw-bold mb-1"),
+                                        dcc.Dropdown(
+                                            id="mes_ref",
+                                            options=MES_REF_OPTIONS,
+                                            value=DEFAULT_MES_REF_SAFE,
+                                            placeholder="Selecione...",
+                                            clearable=False,
+                                            searchable=True,
+                                            className="shadow-sm"
+                                        )
+                                    ], id="col-mes-ref", md=4, lg=2, className="mb-3"),
+                                    dbc.Col([
+                                        html.Div("Data Início", className="small text-muted fw-bold mb-1"),
+                                        dcc.Dropdown(
+                                            id="mes_inicio",
+                                            options=MES_REF_OPTIONS,
+                                            value=None,
+                                            placeholder="Selecione...",
+                                            clearable=True,
+                                            className="shadow-sm"
+                                        )
+                                    ], id="col-mes-inicio", md=4, lg=2, className="mb-3", style={"display": "none"}),
+                                    dbc.Col([
+                                        html.Div("Data Fim", className="small text-muted fw-bold mb-1"),
+                                        dcc.Dropdown(
+                                            id="mes_fim",
+                                            options=MES_REF_OPTIONS,
+                                            value=DEFAULT_MES_REF_SAFE,
+                                            placeholder="Selecione...",
+                                            clearable=False,
+                                            className="shadow-sm"
+                                        )
+                                    ], id="col-mes-fim", md=4, lg=2, className="mb-3", style={"display": "none"}),
+                                    dbc.Col([
+                                        dbc.Button("Atualizar Resumo", id="btn-atualizar", color="primary", className="w-100 shadow-sm fw-bold")
+                                    ], md=2, lg=2, className="ms-md-auto mb-3 align-self-end"),
+                                    dbc.Col([
+                                        dbc.Button("Exportar Excel", id="btn-export", color="success", className="w-100 shadow-sm fw-bold")
+                                    ], md=2, lg=2, className="mb-3 align-self-end"),
+                                ], className="g-3 align-items-end"),
+                                html.Hr(className="text-muted mt-0 mb-4"),
 
-                                    html.Span(f"  |  {COLUNA_AGREGACAO_PRINCIPAL}: ", style={"fontWeight": "700", "marginLeft": "10px"}),
-                                    dcc.Dropdown(
-                                        id="forn",
-                                        options=[{"label": "[TODOS]", "value": "[TODOS]"}] + [{"label": x, "value": x} for x in lista_fornecedores0],
-                                        value="[TODOS]",
-                                        placeholder="Selecione...",
-                                        style={"width": "260px", "display": "inline-block", "verticalAlign": "middle"},
-                                        clearable=False,
-                                    ),
-                                    html.Span("  Fabr: ", style={"fontWeight": "700", "marginLeft": "10px"}),
-                                    dcc.Dropdown(
-                                        id="fab",
-                                        options=[{"label": "[TODOS]", "value": "[TODOS]"}],
-                                        value="[TODOS]",
-                                        style={"width": "220px", "display": "inline-block", "verticalAlign": "middle"},
-                                        clearable=False,
-                                    ),
-                                    html.Span("  Categ: ", style={"fontWeight": "700", "marginLeft": "10px"}),
-                                    dcc.Dropdown(
-                                        id="cat",
-                                        options=[{"label": "[TODAS]", "value": "[TODAS]"}],
-                                        value="[TODAS]",
-                                        style={"width": "220px", "display": "inline-block", "verticalAlign": "middle"},
-                                        clearable=False,
-                                    ),
-                                    html.Span("  Embal: ", style={"fontWeight": "700", "marginLeft": "10px"}),
-                                    dcc.Dropdown(
-                                        id="tipo_embal",
-                                        options=[{"label": x, "value": x} for x in _TIPO_EMBAL_OPCOES],
-                                        value="[TODAS]",
-                                        style={"width": "160px", "display": "inline-block", "verticalAlign": "middle"},
-                                        clearable=False,
-                                    ),
-                                    html.Span("  |  ", style={"color": "#999", "marginLeft": "10px"}),
-
-                                    html.Span("Sim. Marg (%): ", style={"fontSize": "12px", "color": "navy"}),
-                                    dcc.Input(
-                                        id="meta_t1",
-                                        value="30.0",
-                                        type="text",
-                                        style={"width": "70px", "textAlign": "right", "marginRight": "8px"},
-                                    ),
-
-                                    html.Span("Delta Alvo (%): ", style={"fontSize": "12px", "color": "#b75402"}),
-                                    dcc.Input(
-                                        id="meta_t2",
-                                        value="0.0",
-                                        type="text",
-                                        style={"width": "70px", "textAlign": "right", "marginRight": "8px"},
-                                    ),
-
-                                    dbc.Button("Exportar", id="btn-export", color="success"),
-                                ],
-                                style={"display": "flex", "gap": "10px", "alignItems": "center", "flexWrap": "wrap"},
-                            ),
+                                # Linha 2 e 3: Filtros e Metas
+                                dbc.Row([
+                                    dbc.Col([
+                                        html.Div(f"{COLUNA_AGREGACAO_PRINCIPAL}", className="small text-muted fw-bold mb-1"),
+                                        dcc.Dropdown(
+                                            id="forn",
+                                            options=[{"label": "[TODOS]", "value": "[TODOS]"}] + [{"label": x, "value": x} for x in lista_fornecedores0],
+                                            value="[TODOS]",
+                                            placeholder="Selecione...",
+                                            clearable=False,
+                                            className="shadow-sm"
+                                        )
+                                    ], lg=3, md=6, className="mb-3"),
+                                    dbc.Col([
+                                        html.Div("Fabricante", className="small text-muted fw-bold mb-1"),
+                                        dcc.Dropdown(
+                                            id="fab",
+                                            options=[{"label": "[TODOS]", "value": "[TODOS]"}],
+                                            value="[TODOS]",
+                                            clearable=False,
+                                            className="shadow-sm"
+                                        )
+                                    ], lg=3, md=6, className="mb-3"),
+                                    dbc.Col([
+                                        html.Div("Categoria", className="small text-muted fw-bold mb-1"),
+                                        dcc.Dropdown(
+                                            id="cat",
+                                            options=[{"label": "[TODAS]", "value": "[TODAS]"}],
+                                            value="[TODAS]",
+                                            clearable=False,
+                                            className="shadow-sm"
+                                        )
+                                    ], lg=3, md=6, className="mb-3"),
+                                    dbc.Col([
+                                        html.Div("Embalagem", className="small text-muted fw-bold mb-1"),
+                                        dcc.Dropdown(
+                                            id="tipo_embal",
+                                            options=[{"label": x, "value": x} for x in _TIPO_EMBAL_OPCOES],
+                                            value="[TODAS]",
+                                            clearable=False,
+                                            className="shadow-sm"
+                                        )
+                                    ], lg=3, md=6, className="mb-3"),
+                                    dbc.Col([
+                                        html.Div("Sim. Margem (%)", className="small text-dark fw-bold mb-1"),
+                                        dbc.Input(
+                                            id="meta_t1",
+                                            value=30.0,
+                                            type="number",
+                                            step=0.1,
+                                            className="shadow-sm text-dark fw-bold"
+                                        )
+                                    ], lg=2, md=6, className="mb-3"),
+                                    dbc.Col([
+                                        html.Div("Delta Alvo (%)", className="small text-dark fw-bold mb-1"),
+                                        dbc.Input(
+                                            id="meta_t2",
+                                            value=0.0,
+                                            type="number",
+                                            step=0.1,
+                                            className="shadow-sm text-dark fw-bold"
+                                        )
+                                    ], lg=2, md=6, className="mb-3"),
+                                ], className="g-3 align-items-end"),
+                            ]),
                             html.Div(
                                 "",
                                 className="small-muted",
@@ -1071,13 +1093,15 @@ app.layout = dbc.Container(
 # Atualiza opções do seletor Mês/Ano a cada TTL (garante novos meses apareçam)
 # =============================================================================
 @app.callback(
-    Output("div-mes-inicio", "style"),
+    Output("col-mes-inicio", "style"),
+    Output("col-mes-fim", "style"),
+    Output("col-mes-ref", "style"),
     Input("periodo_tipo", "value"),
 )
 def toggle_mes_inicio(periodo_tipo):
     if periodo_tipo == "personalizado":
-        return {"display": "inline-flex", "alignItems": "center", "gap": "5px", "marginLeft": "5px"}
-    return {"display": "none"}
+        return {"display": "block"}, {"display": "block"}, {"display": "none"}
+    return {"display": "none"}, {"display": "none"}, {"display": "block"}
 
 
 @app.callback(
@@ -1129,12 +1153,13 @@ def _set_header(coldefs, field, header):
     Output("grid-t1", "columnDefs"),
     Output("grid-t2", "columnDefs"),
     Output("grid-t3", "columnDefs"),
-    Input("mes_ref", "value"),
-    Input("periodo_tipo", "value"),
+    Input("btn-atualizar", "n_clicks"),
+    State("mes_ref", "value"),
+    State("periodo_tipo", "value"),
     State("mes_inicio", "value"),
     State("mes_fim", "value"),
 )
-def update_grid_headers(mes_ref, periodo_tipo, mes_inicio, mes_fim):
+def update_grid_headers(n_clicks_atualizar, mes_ref, periodo_tipo, mes_inicio, mes_fim):
     available = _get_available_safe()
     ref_efetivo = _resolve_mes_ref(periodo_tipo, mes_ref, mes_fim)
     mes_ini = _resolve_mes_inicio(periodo_tipo, ref_efetivo, mes_inicio, available)
@@ -1146,8 +1171,8 @@ def update_grid_headers(mes_ref, periodo_tipo, mes_inicio, mes_fim):
 
     t3 = coldefs_t3
     t3 = _set_header(t3, "Fat Ref", f"Fat {lab}")
-    t3 = _set_header(t3, "Margem Ref R$", f"Margem {lab} R$")
-    t3 = _set_header(t3, "Margem Ref %", f"Margem {lab} %")
+    t3 = _set_header(t3, "Margem Ref R$", f"R$ Margem {lab}")
+    t3 = _set_header(t3, "Margem Ref %", f"% Margem {lab}")
 
     return t1, t2, t3
 
@@ -1200,22 +1225,23 @@ def on_cat_t3_change(mes_ref, cat_t3):
     Output("kpi-line-t3", "children"),
     Output("breakdown-t3", "children"),
 
+    Input("btn-atualizar", "n_clicks"),
     Input("tabs", "active_tab"),
-    Input("mes_ref", "value"),
-    Input("forn", "value"),
-    Input("fab", "value"),
-    Input("cat", "value"),
-    Input("tipo_embal", "value"),
-    Input("meta_t1", "value"),
-    Input("meta_t2", "value"),
-    Input("cat_t3", "value"),
-    Input("forn_t3", "value"),
+    State("mes_ref", "value"),
+    State("forn", "value"),
+    State("fab", "value"),
+    State("cat", "value"),
+    State("tipo_embal", "value"),
+    State("meta_t1", "value"),
+    State("meta_t2", "value"),
+    State("cat_t3", "value"),
+    State("forn_t3", "value"),
     Input("store-sim", "data"),
-    Input("periodo_tipo", "value"),
+    State("periodo_tipo", "value"),
     State("mes_inicio", "value"),
     State("mes_fim", "value"),
 )
-def refresh_all(active_tab, mes_ref, forn, fab, cat, tipo_embal, meta_t1, meta_t2, cat_t3, forn_t3, sim_store, periodo_tipo, mes_inicio_val, mes_fim_val):
+def refresh_all(n_clicks_atualizar, active_tab, mes_ref, forn, fab, cat, tipo_embal, meta_t1, meta_t2, cat_t3, forn_t3, sim_store, periodo_tipo, mes_inicio_val, mes_fim_val):
     ref_efetivo = _resolve_mes_ref(periodo_tipo, mes_ref, mes_fim_val)
     mes_ini = _resolve_mes_inicio(periodo_tipo, ref_efetivo, mes_inicio_val, _get_available_safe())
     df_base, bench_ano, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, force_reload=False, mes_inicio_safe=mes_ini)
