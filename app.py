@@ -190,6 +190,34 @@ if _available_safe:
     DEFAULT_MES_REF_SAFE = _available_safe[-1]
 
 
+def _safe_to_ddmmyyyy(safe: str | None) -> str:
+    """Converte 'YYYY_MM' para '01/MM/YYYY' (texto de exibição para o input de data)."""
+    if not safe:
+        return ""
+    m = re.match(r"^(\d{4})[_-](\d{2})$", str(safe).strip())
+    if m:
+        return f"01/{m.group(2)}/{m.group(1)}"
+    return ""
+
+
+def _parse_ddmmyyyy_to_safe(s: str | None) -> str | None:
+    """Converte 'dd/mm/yyyy' para 'YYYY_MM'. Aceita também 'YYYY_MM' passado diretamente."""
+    if not s:
+        return None
+    s = str(s).strip()
+    # Formato dd/mm/yyyy
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
+    if m:
+        return f"{m.group(3)}_{m.group(2).zfill(2)}"
+    # Já em formato YYYY_MM ou YYYY-MM (retrocompat)
+    if re.match(r"^\d{4}[_-]\d{2}$", s):
+        return s.replace("-", "_")
+    return None
+
+
+DEFAULT_MES_FIM_TEXT = _safe_to_ddmmyyyy(DEFAULT_MES_REF_SAFE)
+
+
 # ---------- Helpers ----------
 def _safe_float_percent(val: Any, default: float) -> float:
     """
@@ -364,7 +392,7 @@ def _apply_excel_formats(ws):
         "Custo",
         "Marg R$",
         "Sim Preço",
-        "Sim Custo Nec",
+        "Sim Custo",
         "PETZ",
         "PROCAMPO",
         "Sim Preço (Conc)",
@@ -378,7 +406,7 @@ def _apply_excel_formats(ws):
         "Sim Marg",
         "Marg Atual %",
         "Dif % (Menor)",
-        "Dif Atual (Menor)",
+        "Dif % (menor preço)",
         "DELTA ALVO %",
         "Sim Margem (Result)",
         "Margem Ref %",
@@ -641,7 +669,7 @@ coldefs_t1 = [
     {"headerName": "Dif % (menor preço)", "field": "Dif % (Menor)", "width": 120},
     {"headerName": "Menor preço", "field": "Sim Preço", "width": 110},
     {"headerName": "Sim Marg", "field": "Sim Marg", "width": 95},
-    {"headerName": "Sim Custo Nec", "field": "Sim Custo Nec", "width": 120},
+    {"headerName": "Sim Custo", "field": "Sim Custo", "width": 120},
 ]
 
 coldefs_t2 = [
@@ -657,7 +685,7 @@ coldefs_t2 = [
     {"headerName": "Marg Atual %", "field": "Marg Atual %", "width": 115},
     {"headerName": "PETZ", "field": "PETZ", "width": 110},
     {"headerName": "PROCAMPO", "field": "PROCAMPO", "width": 110},
-    {"headerName": "Dif Atual (Menor)", "field": "Dif Atual (Menor)", "width": 130},
+    {"headerName": "Dif % (menor preço)", "field": "Dif % (menor preço)", "width": 130},
     {"headerName": "DELTA ALVO %", "field": "DELTA ALVO %", "width": 120},
     {"headerName": "Sim Preço (Conc)", "field": "Sim Preço (Conc)", "width": 130},
     {"headerName": "Sim Margem (Result)", "field": "Sim Margem (Result)", "width": 140},
@@ -794,24 +822,26 @@ app.layout = dbc.Container(
                                     ], id="col-mes-ref", md=4, lg=2, className="mb-3"),
                                     dbc.Col([
                                         html.Div("Data Início", className="small text-muted fw-bold mb-1"),
-                                        dcc.Dropdown(
+                                        dcc.Input(
                                             id="mes_inicio",
-                                            options=MES_REF_OPTIONS,
+                                            type="text",
                                             value=None,
-                                            placeholder="Selecione...",
-                                            clearable=True,
-                                            className="shadow-sm"
+                                            placeholder="dd/mm/aaaa",
+                                            debounce=True,
+                                            className="form-control shadow-sm",
+                                            style={"fontSize": "14px"},
                                         )
                                     ], id="col-mes-inicio", md=4, lg=2, className="mb-3", style={"display": "none"}),
                                     dbc.Col([
                                         html.Div("Data Fim", className="small text-muted fw-bold mb-1"),
-                                        dcc.Dropdown(
+                                        dcc.Input(
                                             id="mes_fim",
-                                            options=MES_REF_OPTIONS,
-                                            value=DEFAULT_MES_REF_SAFE,
-                                            placeholder="Selecione...",
-                                            clearable=False,
-                                            className="shadow-sm"
+                                            type="text",
+                                            value=DEFAULT_MES_FIM_TEXT,
+                                            placeholder="dd/mm/aaaa",
+                                            debounce=True,
+                                            className="form-control shadow-sm",
+                                            style={"fontSize": "14px"},
                                         )
                                     ], id="col-mes-fim", md=4, lg=2, className="mb-3", style={"display": "none"}),
                                     dbc.Col([
@@ -1106,8 +1136,6 @@ def toggle_mes_inicio(periodo_tipo):
 
 @app.callback(
     Output("mes_ref", "options"),
-    Output("mes_inicio", "options"),
-    Output("mes_fim", "options"),
     Input("interval-refresh", "n_intervals"),
 )
 def refresh_mes_ref_options(_):
@@ -1116,8 +1144,8 @@ def refresh_mes_ref_options(_):
     available_human = month_ctx.get("available_labels_human") or []
     if available_safe and available_human and len(available_safe) == len(available_human):
         opts = [{"label": h, "value": s} for s, h in zip(available_safe, available_human)]
-        return opts, opts, opts
-    return no_update, no_update, no_update
+        return opts
+    return no_update
 
 
 # =============================================================================
@@ -1160,6 +1188,8 @@ def _set_header(coldefs, field, header):
     State("mes_fim", "value"),
 )
 def update_grid_headers(n_clicks_atualizar, mes_ref, periodo_tipo, mes_inicio, mes_fim):
+    mes_inicio = _parse_ddmmyyyy_to_safe(mes_inicio)
+    mes_fim = _parse_ddmmyyyy_to_safe(mes_fim)
     available = _get_available_safe()
     ref_efetivo = _resolve_mes_ref(periodo_tipo, mes_ref, mes_fim)
     mes_ini = _resolve_mes_inicio(periodo_tipo, ref_efetivo, mes_inicio, available)
@@ -1242,6 +1272,8 @@ def on_cat_t3_change(mes_ref, cat_t3):
     State("mes_fim", "value"),
 )
 def refresh_all(n_clicks_atualizar, active_tab, mes_ref, forn, fab, cat, tipo_embal, meta_t1, meta_t2, cat_t3, forn_t3, sim_store, periodo_tipo, mes_inicio_val, mes_fim_val):
+    mes_inicio_val = _parse_ddmmyyyy_to_safe(mes_inicio_val)
+    mes_fim_val = _parse_ddmmyyyy_to_safe(mes_fim_val)
     ref_efetivo = _resolve_mes_ref(periodo_tipo, mes_ref, mes_fim_val)
     mes_ini = _resolve_mes_inicio(periodo_tipo, ref_efetivo, mes_inicio_val, _get_available_safe())
     df_base, bench_ano, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, force_reload=False, mes_inicio_safe=mes_ini)
@@ -1251,10 +1283,10 @@ def refresh_all(n_clicks_atualizar, active_tab, mes_ref, forn, fab, cat, tipo_em
 
     df_view_12 = _filter_tab12(df_base, forn, fab, cat, tipo_embal or "[TODAS]")
     rows_t1 = build_tab1_rows(df_view_12, sim_store, meta_t1_atual)
-    sum_t1 = compute_summary(df_view_12, bench_ano, month_ctx=month_ctx)
+    sum_t1 = compute_summary(df_view_12, bench_ano, month_ctx=month_ctx, rows=rows_t1)
 
     rows_t2 = build_tab2_rows(df_view_12, sim_store, meta_t2_atual)
-    sum_t2 = compute_summary(df_view_12, bench_ano, month_ctx=month_ctx)
+    sum_t2 = compute_summary(df_view_12, bench_ano, month_ctx=month_ctx, rows=rows_t2)
 
     df_view_3 = _filter_tab3(df_base, cat_t3, forn_t3)
     rows_t3 = build_tab3_rows(df_view_3)
@@ -1327,6 +1359,8 @@ def fit_columns_on_visible_tab(active_tab):
 def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, fab, cat, active_tab, periodo_tipo, mes_inicio_val, mes_fim_val):
     hist_default = {"produto": "Selecione...", "cod_barras": "-", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"}
 
+    mes_inicio_val = _parse_ddmmyyyy_to_safe(mes_inicio_val)
+    mes_fim_val = _parse_ddmmyyyy_to_safe(mes_fim_val)
     ref_efetivo = _resolve_mes_ref(periodo_tipo, mes_ref, mes_fim_val)
     mes_ini = _resolve_mes_inicio(periodo_tipo, ref_efetivo, mes_inicio_val, _get_available_safe())
     df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, mes_inicio_safe=mes_ini)
@@ -1662,6 +1696,8 @@ def update_mkt_estimate(delta, selected, rowData):
 )
 def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_store, cs_t1, cs_t2, cs_t3, rd_t1, rd_t2, rd_t3, periodo_tipo, mes_inicio_val, mes_fim_val):
     try:
+        mes_inicio_val = _parse_ddmmyyyy_to_safe(mes_inicio_val)
+        mes_fim_val = _parse_ddmmyyyy_to_safe(mes_fim_val)
         ref_efetivo = _resolve_mes_ref(periodo_tipo, mes_ref, mes_fim_val)
         mes_ini = _resolve_mes_inicio(periodo_tipo, ref_efetivo, mes_inicio_val, _get_available_safe())
         df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, mes_inicio_safe=mes_ini)
@@ -1717,9 +1753,9 @@ def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_st
             "Dif % (Menor)",
             "Sim Preço",
             "Sim Marg",
-            "Sim Custo Nec",
+            "Sim Custo",
             "Marg Atual %",
-            "Dif Atual (Menor)",
+            "Dif % (menor preço)",
             "DELTA ALVO %",
             "Sim Preço (Conc)",
             "Sim Margem (Result)",

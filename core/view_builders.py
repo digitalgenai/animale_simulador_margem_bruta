@@ -127,11 +127,24 @@ def _get_sim_state(sim_store: Dict[str, Any], produto_key: str) -> Tuple[bool, f
     return sim_manual_ativa, sim_preco_man, sim_marg_man, sim_conc_ativa, sim_conc_delta
 
 
-def compute_summary(df_view: pd.DataFrame, bench_ano: dict, month_ctx=None):
+def _classify_abc(acum_frac: float) -> str:
+    """Classifica ABC com base no faturamento acumulado percentual.
+    A: 0% – 80%; B: 80,01% – 95%; C: 95,01% – 100%
+    """
+    if acum_frac <= 0.80:
+        return "A"
+    if acum_frac <= 0.95:
+        return "B"
+    return "C"
+
+
+def compute_summary(df_view: pd.DataFrame, bench_ano: dict, month_ctx=None, rows: List[Dict[str, Any]] | None = None):
     """
     Correção crítica:
     - MG(mês) deve ser margem real PONDERADA/AGREGADA, não média de %.
     - GL(Year) deve vir do bench_ano calculado como margem real anual agregada / fat anual agregada.
+    - Quando `rows` é fornecido, os contadores ABC (A/B/C) são derivados das rows
+      (que já usam Fat_Acum_Pct como base), garantindo consistência com o que é exibido.
     """
     if df_view is None or df_view.empty:
         return {
@@ -184,9 +197,17 @@ def compute_summary(df_view: pd.DataFrame, bench_ano: dict, month_ctx=None):
 
     # SKUs e ABC
     qtd_sku = int(len(df_view))
-    sku_a = int((df_view.get("Curva_ABC") == "A").sum()) if "Curva_ABC" in df_view.columns else 0
-    sku_b = int((df_view.get("Curva_ABC") == "B").sum()) if "Curva_ABC" in df_view.columns else 0
-    sku_c = int((df_view.get("Curva_ABC") == "C").sum()) if "Curva_ABC" in df_view.columns else 0
+
+    if rows is not None:
+        # Conta ABC a partir das rows (já recalculadas com base em Fat_Acum_Pct)
+        sku_a = sum(1 for r in rows if r.get("ABC") == "A")
+        sku_b = sum(1 for r in rows if r.get("ABC") == "B")
+        sku_c = sum(1 for r in rows if r.get("ABC") == "C")
+        qtd_sku = len(rows)
+    else:
+        sku_a = int((df_view.get("Curva_ABC") == "A").sum()) if "Curva_ABC" in df_view.columns else 0
+        sku_b = int((df_view.get("Curva_ABC") == "B").sum()) if "Curva_ABC" in df_view.columns else 0
+        sku_c = int((df_view.get("Curva_ABC") == "C").sum()) if "Curva_ABC" in df_view.columns else 0
 
     return {
         "fat_total": fat_total,
@@ -260,7 +281,7 @@ def build_tab1_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
                 "Dif % (Menor)": fmt_perc(dif_conc),
                 "Sim Preço": fmt_real(sim_p),
                 "Sim Marg": fmt_perc(sim_m),
-                "Sim Custo Nec": fmt_real(sim_c),
+                "Sim Custo": fmt_real(sim_c),
                 "_fat_raw": fat_raw,
                 "_produto_key": produto_key,
                 "_produto_nome": str(produto_nome),
@@ -278,13 +299,16 @@ def build_tab1_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
         )
 
     # Faturamento = Qtd Ref × Preço Atual; Fat. Acum % = acumulado sobre o total
+    # ABC é reclassificado aqui com base no mesmo acumulado exibido na tabela
     total_fat = sum(r.get("_fat_raw", 0.0) for r in rows)
     acum = 0.0
     for r in rows:
         fat = r.get("_fat_raw", 0.0)
         acum += fat
+        acum_frac = acum / total_fat if total_fat > 0 else 0.0
         r["Faturamento"] = fmt_real(fat)
-        r["Fat_Acum_Pct"] = fmt_perc(acum / total_fat if total_fat > 0 else 0.0)
+        r["Fat_Acum_Pct"] = fmt_perc(acum_frac)
+        r["ABC"] = _classify_abc(acum_frac)
 
     return rows
 
@@ -348,7 +372,7 @@ def build_tab2_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
                 "Marg Atual %": fmt_perc(marg_real),
                 NOME_CONC_1: fmt_real(val_conc1),
                 NOME_CONC_2: fmt_real(val_conc2),
-                "Dif Atual (Menor)": fmt_perc(dif_atual),
+                "Dif % (menor preço)": fmt_perc(dif_atual),
                 "DELTA ALVO %": delta_str,
                 "Sim Preço (Conc)": fmt_real(sim_p_conc),
                 "Sim Margem (Result)": fmt_perc(sim_marg_result),
@@ -372,8 +396,10 @@ def build_tab2_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
     for r in rows:
         fat = r.get("_fat_raw", 0.0)
         acum += fat
+        acum_frac = acum / total_fat if total_fat > 0 else 0.0
         r["Faturamento"] = fmt_real(fat)
-        r["Fat_Acum_Pct"] = fmt_perc(acum / total_fat if total_fat > 0 else 0.0)
+        r["Fat_Acum_Pct"] = fmt_perc(acum_frac)
+        r["ABC"] = _classify_abc(acum_frac)
 
     return rows
 
