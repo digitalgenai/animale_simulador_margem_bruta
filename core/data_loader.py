@@ -248,6 +248,28 @@ def _fetch_available_months(engine: Engine, full_table: str) -> List[pd.Timestam
     return out
 
 
+def get_last_available_date(
+    engine: Optional[Engine] = None,
+    schema: Optional[str] = None,
+    table: Optional[str] = None,
+) -> Optional["datetime"]:
+    """Retorna a última data com dados no datalake (nível de dia)."""
+    from datetime import datetime as _dt
+    schema = schema or PGSCHEMA_DEFAULT
+    table = table or PGTABLE_DEFAULT
+    full = f"{schema}.{table}"
+    engine = engine or get_engine()
+    try:
+        sql = text(f"SELECT MAX(data_venda::date) AS last_date FROM {full} WHERE data_venda IS NOT NULL")
+        with engine.connect() as conn:
+            result = conn.execute(sql).fetchone()
+        if result and result[0] is not None:
+            return pd.Timestamp(result[0]).to_pydatetime()
+    except Exception as e:
+        logger.warning("Não foi possível obter última data disponível: %s", e)
+    return None
+
+
 # ======================================================================================
 # Regras de dedução por área (para benchmark GL correto)
 # ======================================================================================

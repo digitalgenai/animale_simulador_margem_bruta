@@ -19,7 +19,7 @@ from core.config import (
     BASE_SIMULADOR_PATH,
     COLUNA_AGREGACAO_PRINCIPAL,
 )
-from core.data_loader import load_base_data, get_month_context
+from core.data_loader import load_base_data, get_month_context, get_last_available_date
 from core.view_builders import (
     compute_summary,
     build_tab1_rows,
@@ -46,7 +46,7 @@ try:
     _df_embal.columns = [c.strip() for c in _df_embal.columns]
     _bc_col = next(c for c in _df_embal.columns if "barras" in c.lower())
     _tp_col = next(c for c in _df_embal.columns if "embalagem" in c.lower())
-    _df_embal[_bc_col] = _df_embal[_bc_col].str.strip()
+    _df_embal[_bc_col] = _df_embal[_bc_col].str.strip().str.replace(r"\.0$", "", regex=True)
     _df_embal[_tp_col] = _df_embal[_tp_col].str.strip()
     _TIPO_EMBAL_MAP = dict(zip(_df_embal[_bc_col], _df_embal[_tp_col]))
     _tipos_unicos = sorted(_df_embal[_tp_col].dropna().unique().tolist())
@@ -201,10 +201,14 @@ def _safe_to_ddmmyyyy(safe: str | None) -> str:
 
 
 def _parse_ddmmyyyy_to_safe(s: str | None) -> str | None:
-    """Converte 'dd/mm/yyyy' para 'YYYY_MM'. Aceita também 'YYYY_MM' passado diretamente."""
+    """Converte 'dd/mm/yyyy' ou 'YYYY-MM-DD' para 'YYYY_MM'. Aceita também 'YYYY_MM' passado diretamente."""
     if not s:
         return None
     s = str(s).strip()
+    # Formato ISO YYYY-MM-DD (vindo do DatePickerSingle)
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", s)
+    if m:
+        return f"{m.group(1)}_{m.group(2)}"
     # Formato dd/mm/yyyy
     m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
     if m:
@@ -215,7 +219,13 @@ def _parse_ddmmyyyy_to_safe(s: str | None) -> str | None:
     return None
 
 
-DEFAULT_MES_FIM_TEXT = _safe_to_ddmmyyyy(DEFAULT_MES_REF_SAFE)
+_last_available_date = get_last_available_date()
+if _last_available_date:
+    DEFAULT_MES_FIM_DATE = _last_available_date.strftime("%Y-%m-%d")
+    DEFAULT_MES_INICIO_DATE = _last_available_date.strftime("%Y-%m-01")
+else:
+    DEFAULT_MES_FIM_DATE = None
+    DEFAULT_MES_INICIO_DATE = None
 
 
 # ---------- Helpers ----------
@@ -795,14 +805,9 @@ app.layout = dbc.Container(
                                         dcc.Dropdown(
                                             id="periodo_tipo",
                                             options=[
-                                                {"label": "Últimos 3 meses", "value": "ultimos_3"},
-                                                {"label": "Últimos 6 meses", "value": "ultimos_6"},
-                                                {"label": "Últimos 12 meses", "value": "ultimos_12"},
-                                                {"label": "Mês Atual", "value": "mes_unico"},
-                                                {"label": "Mês Anterior", "value": "mes_anterior"},
                                                 {"label": "Personalizado", "value": "personalizado"},
                                             ],
-                                            value="mes_unico",
+                                            value="personalizado",
                                             clearable=False,
                                             searchable=True,
                                             className="shadow-sm"
@@ -822,26 +827,30 @@ app.layout = dbc.Container(
                                     ], id="col-mes-ref", md=4, lg=2, className="mb-3"),
                                     dbc.Col([
                                         html.Div("Data Início", className="small text-muted fw-bold mb-1"),
-                                        dcc.Input(
+                                        dcc.DatePickerSingle(
                                             id="mes_inicio",
-                                            type="text",
-                                            value=None,
-                                            placeholder="dd/mm/aaaa",
-                                            debounce=True,
-                                            className="form-control shadow-sm",
-                                            style={"fontSize": "14px"},
+                                            date=DEFAULT_MES_INICIO_DATE,
+                                            display_format="DD/MM/YYYY",
+                                            month_format="MMMM YYYY",
+                                            first_day_of_week=1,
+                                            placeholder="DD/MM/AAAA",
+                                            clearable=False,
+                                            style={"width": "100%"},
+                                            className="shadow-sm",
                                         )
                                     ], id="col-mes-inicio", md=4, lg=2, className="mb-3", style={"display": "none"}),
                                     dbc.Col([
                                         html.Div("Data Fim", className="small text-muted fw-bold mb-1"),
-                                        dcc.Input(
+                                        dcc.DatePickerSingle(
                                             id="mes_fim",
-                                            type="text",
-                                            value=DEFAULT_MES_FIM_TEXT,
-                                            placeholder="dd/mm/aaaa",
-                                            debounce=True,
-                                            className="form-control shadow-sm",
-                                            style={"fontSize": "14px"},
+                                            date=DEFAULT_MES_FIM_DATE,
+                                            display_format="DD/MM/YYYY",
+                                            month_format="MMMM YYYY",
+                                            first_day_of_week=1,
+                                            placeholder="DD/MM/AAAA",
+                                            clearable=False,
+                                            style={"width": "100%"},
+                                            className="shadow-sm",
                                         )
                                     ], id="col-mes-fim", md=4, lg=2, className="mb-3", style={"display": "none"}),
                                     dbc.Col([
@@ -1184,8 +1193,8 @@ def _set_header(coldefs, field, header):
     Input("btn-atualizar", "n_clicks"),
     State("mes_ref", "value"),
     State("periodo_tipo", "value"),
-    State("mes_inicio", "value"),
-    State("mes_fim", "value"),
+    State("mes_inicio", "date"),
+    State("mes_fim", "date"),
 )
 def update_grid_headers(n_clicks_atualizar, mes_ref, periodo_tipo, mes_inicio, mes_fim):
     mes_inicio = _parse_ddmmyyyy_to_safe(mes_inicio)
@@ -1268,8 +1277,8 @@ def on_cat_t3_change(mes_ref, cat_t3):
     State("forn_t3", "value"),
     Input("store-sim", "data"),
     State("periodo_tipo", "value"),
-    State("mes_inicio", "value"),
-    State("mes_fim", "value"),
+    State("mes_inicio", "date"),
+    State("mes_fim", "date"),
 )
 def refresh_all(n_clicks_atualizar, active_tab, mes_ref, forn, fab, cat, tipo_embal, meta_t1, meta_t2, cat_t3, forn_t3, sim_store, periodo_tipo, mes_inicio_val, mes_fim_val):
     mes_inicio_val = _parse_ddmmyyyy_to_safe(mes_inicio_val)
@@ -1353,8 +1362,8 @@ def fit_columns_on_visible_tab(active_tab):
     Input("cat", "value"),
     Input("tabs", "active_tab"),
     State("periodo_tipo", "value"),
-    State("mes_inicio", "value"),
-    State("mes_fim", "value"),
+    State("mes_inicio", "date"),
+    State("mes_fim", "date"),
 )
 def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, fab, cat, active_tab, periodo_tipo, mes_inicio_val, mes_fim_val):
     hist_default = {"produto": "Selecione...", "cod_barras": "-", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"}
@@ -1690,8 +1699,8 @@ def update_mkt_estimate(delta, selected, rowData):
     State("grid-t2", "rowData"),
     State("grid-t3", "rowData"),
     State("periodo_tipo", "value"),
-    State("mes_inicio", "value"),
-    State("mes_fim", "value"),
+    State("mes_inicio", "date"),
+    State("mes_fim", "date"),
     prevent_initial_call=True,
 )
 def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_store, cs_t1, cs_t2, cs_t3, rd_t1, rd_t2, rd_t3, periodo_tipo, mes_inicio_val, mes_fim_val):
