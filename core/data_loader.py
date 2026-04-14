@@ -607,6 +607,8 @@ def load_base_data(
     ref_month: Optional[int] = None,
     ref_start_year: Optional[int] = None,
     ref_start_month_num: Optional[int] = None,
+    ref_end_date: Optional[str] = None,
+    ref_start_date: Optional[str] = None,
 ) -> Tuple[
     pd.DataFrame,
     Dict[str, float],
@@ -684,6 +686,9 @@ def load_base_data(
         n,
     )
 
+    _extra_start = "AND data_venda::date >= :ref_start_date" if ref_start_date else ""
+    _extra_end   = "AND data_venda::date <= :ref_end_date"   if ref_end_date   else ""
+
     sql = text(
         f"""
         SELECT
@@ -701,15 +706,23 @@ def load_base_data(
         WHERE data_venda IS NOT NULL
         AND date_trunc('month', data_venda)::date >= :start_month
         AND date_trunc('month', data_venda)::date <= :ref_month
+        {_extra_start}
+        {_extra_end}
         GROUP BY
             cod_produto, produto, cod_barras, fornecedor, fabricante, area, mes
         """
     )
 
+    _sql_params: dict = {"start_month": start_month, "ref_month": ref_month_start}
+    if ref_start_date:
+        _sql_params["ref_start_date"] = ref_start_date
+    if ref_end_date:
+        _sql_params["ref_end_date"] = ref_end_date
+
     df_win = pd.read_sql(
         sql,
         engine,
-        params={"start_month": start_month, "ref_month": ref_month_start},
+        params=_sql_params,
     )
 
     logger.info("df_win rows=%s", len(df_win))

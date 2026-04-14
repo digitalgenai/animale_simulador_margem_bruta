@@ -73,8 +73,27 @@ def _parse_ym_safe(s: str | None) -> Tuple[int | None, int | None]:
     return int(m.group(1)), int(m.group(2))
 
 
-def _get_data_for_mes_ref(mes_ref_safe: str | None, force_reload: bool = False, mes_inicio_safe: str | None = None):
-    key = f"{mes_ref_safe or '__DEFAULT__'}|{mes_inicio_safe or ''}"
+def _extract_iso_date(s: str | None) -> str | None:
+    """Retorna 'YYYY-MM-DD' a partir do valor do DatePickerSingle ou dd/mm/yyyy. None se inválido."""
+    if not s:
+        return None
+    s = str(s).strip()
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+        return s
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
+    if m:
+        return f"{m.group(3)}-{m.group(2).zfill(2)}-{m.group(1).zfill(2)}"
+    return None
+
+
+def _get_data_for_mes_ref(
+    mes_ref_safe: str | None,
+    force_reload: bool = False,
+    mes_inicio_safe: str | None = None,
+    ref_start_date_iso: str | None = None,
+    ref_end_date_iso: str | None = None,
+):
+    key = f"{mes_ref_safe or '__DEFAULT__'}|{mes_inicio_safe or ''}|{ref_start_date_iso or ''}|{ref_end_date_iso or ''}"
 
     with _DATA_LOCK:
         if force_reload:
@@ -92,19 +111,22 @@ def _get_data_for_mes_ref(mes_ref_safe: str | None, force_reload: bool = False, 
 
         if mes_ref_safe is None or mes_ref_safe == "__DEFAULT__":
             df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data(
-                ref_start_year=y_ini, ref_start_month_num=m_ini
+                ref_start_year=y_ini, ref_start_month_num=m_ini,
+                ref_start_date=ref_start_date_iso, ref_end_date=ref_end_date_iso,
             )
             month_ctx = get_month_context()
         else:
             y, m = _parse_ym_safe(mes_ref_safe)
             if y is None or m is None:
                 df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data(
-                    ref_start_year=y_ini, ref_start_month_num=m_ini
+                    ref_start_year=y_ini, ref_start_month_num=m_ini,
+                    ref_start_date=ref_start_date_iso, ref_end_date=ref_end_date_iso,
                 )
                 month_ctx = get_month_context()
             else:
                 df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data(
-                    ref_year=y, ref_month=m, ref_start_year=y_ini, ref_start_month_num=m_ini
+                    ref_year=y, ref_month=m, ref_start_year=y_ini, ref_start_month_num=m_ini,
+                    ref_start_date=ref_start_date_iso, ref_end_date=ref_end_date_iso,
                 )
                 month_ctx = get_month_context()
 
@@ -1197,12 +1219,14 @@ def _set_header(coldefs, field, header):
     State("mes_fim", "date"),
 )
 def update_grid_headers(n_clicks_atualizar, mes_ref, periodo_tipo, mes_inicio, mes_fim):
+    _start_iso = _extract_iso_date(mes_inicio) if periodo_tipo == "personalizado" else None
+    _end_iso   = _extract_iso_date(mes_fim)   if periodo_tipo == "personalizado" else None
     mes_inicio = _parse_ddmmyyyy_to_safe(mes_inicio)
     mes_fim = _parse_ddmmyyyy_to_safe(mes_fim)
     available = _get_available_safe()
     ref_efetivo = _resolve_mes_ref(periodo_tipo, mes_ref, mes_fim)
     mes_ini = _resolve_mes_inicio(periodo_tipo, ref_efetivo, mes_inicio, available)
-    _, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, mes_inicio_safe=mes_ini)
+    _, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, mes_inicio_safe=mes_ini, ref_start_date_iso=_start_iso, ref_end_date_iso=_end_iso)
     lab = _closed_month_label(month_ctx)
 
     t1 = _set_header(coldefs_t1, "Qtd Ref", f"Qtd {lab}")
@@ -1281,11 +1305,13 @@ def on_cat_t3_change(mes_ref, cat_t3):
     State("mes_fim", "date"),
 )
 def refresh_all(n_clicks_atualizar, active_tab, mes_ref, forn, fab, cat, tipo_embal, meta_t1, meta_t2, cat_t3, forn_t3, sim_store, periodo_tipo, mes_inicio_val, mes_fim_val):
+    _start_iso = _extract_iso_date(mes_inicio_val) if periodo_tipo == "personalizado" else None
+    _end_iso   = _extract_iso_date(mes_fim_val)   if periodo_tipo == "personalizado" else None
     mes_inicio_val = _parse_ddmmyyyy_to_safe(mes_inicio_val)
     mes_fim_val = _parse_ddmmyyyy_to_safe(mes_fim_val)
     ref_efetivo = _resolve_mes_ref(periodo_tipo, mes_ref, mes_fim_val)
     mes_ini = _resolve_mes_inicio(periodo_tipo, ref_efetivo, mes_inicio_val, _get_available_safe())
-    df_base, bench_ano, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, force_reload=False, mes_inicio_safe=mes_ini)
+    df_base, bench_ano, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, force_reload=False, mes_inicio_safe=mes_ini, ref_start_date_iso=_start_iso, ref_end_date_iso=_end_iso)
 
     meta_t1_atual = _safe_float_percent(meta_t1, 0.30)
     meta_t2_atual = _safe_float_percent(meta_t2, 0.00)
@@ -1368,11 +1394,13 @@ def fit_columns_on_visible_tab(active_tab):
 def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, fab, cat, active_tab, periodo_tipo, mes_inicio_val, mes_fim_val):
     hist_default = {"produto": "Selecione...", "cod_barras": "-", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"}
 
+    _start_iso = _extract_iso_date(mes_inicio_val) if periodo_tipo == "personalizado" else None
+    _end_iso   = _extract_iso_date(mes_fim_val)   if periodo_tipo == "personalizado" else None
     mes_inicio_val = _parse_ddmmyyyy_to_safe(mes_inicio_val)
     mes_fim_val = _parse_ddmmyyyy_to_safe(mes_fim_val)
     ref_efetivo = _resolve_mes_ref(periodo_tipo, mes_ref, mes_fim_val)
     mes_ini = _resolve_mes_inicio(periodo_tipo, ref_efetivo, mes_inicio_val, _get_available_safe())
-    df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, mes_inicio_safe=mes_ini)
+    df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, mes_inicio_safe=mes_ini, ref_start_date_iso=_start_iso, ref_end_date_iso=_end_iso)
 
     trig = ctx.triggered_id
 
@@ -1705,11 +1733,13 @@ def update_mkt_estimate(delta, selected, rowData):
 )
 def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_store, cs_t1, cs_t2, cs_t3, rd_t1, rd_t2, rd_t3, periodo_tipo, mes_inicio_val, mes_fim_val):
     try:
+        _start_iso = _extract_iso_date(mes_inicio_val) if periodo_tipo == "personalizado" else None
+        _end_iso   = _extract_iso_date(mes_fim_val)   if periodo_tipo == "personalizado" else None
         mes_inicio_val = _parse_ddmmyyyy_to_safe(mes_inicio_val)
         mes_fim_val = _parse_ddmmyyyy_to_safe(mes_fim_val)
         ref_efetivo = _resolve_mes_ref(periodo_tipo, mes_ref, mes_fim_val)
         mes_ini = _resolve_mes_inicio(periodo_tipo, ref_efetivo, mes_inicio_val, _get_available_safe())
-        df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, mes_inicio_safe=mes_ini)
+        df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, mes_inicio_safe=mes_ini, ref_start_date_iso=_start_iso, ref_end_date_iso=_end_iso)
         if df_base is None or df_base.empty:
             return no_update
 
