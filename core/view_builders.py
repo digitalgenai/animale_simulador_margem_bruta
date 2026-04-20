@@ -157,11 +157,21 @@ def compute_summary(df_view: pd.DataFrame, bench_ano: dict, month_ctx=None, rows
             "breakdown": [],
         }
 
-    # FAT do recorte
-    fat_total = float(pd.to_numeric(df_view.get("Fat_Ref"), errors="coerce").fillna(0.0).sum())
+    _hidden = {"outros", "outro", "desconhecidos", "desconhecido"}
+
+    def _is_hidden(area) -> bool:
+        return str(area or "").strip().lower() in _hidden
+
+    # FAT e Margem excluindo categorias Outros/Desconhecido
+    if "Area" in df_view.columns:
+        df_visible = df_view[~df_view["Area"].apply(_is_hidden)]
+    else:
+        df_visible = df_view
+
+    fat_total = float(pd.to_numeric(df_visible.get("Fat_Ref"), errors="coerce").fillna(0.0).sum())
 
     # Margem % ponderada do recorte (margem real agregada / fat agregado)
-    marg_pond = float(calcular_margem_pond_percentual(df_view, col_fat="Fat_Ref", col_marg_val="Marg_Val_Ref"))
+    marg_pond = float(calcular_margem_pond_percentual(df_visible, col_fat="Fat_Ref", col_marg_val="Marg_Val_Ref"))
 
     # breakdown Top Categorias (Forn. vs Benchmarks)
     breakdown = []
@@ -191,8 +201,8 @@ def compute_summary(df_view: pd.DataFrame, bench_ano: dict, month_ctx=None, rows
                 }
             )
 
-    # ordena top por FAT
-    breakdown.sort(key=lambda x: x["fat"], reverse=True)
+    # ordena por nome da categoria (alfabético)
+    breakdown.sort(key=lambda x: x["categoria"].lower())
     breakdown = breakdown[:10]
 
     # SKUs e ABC
