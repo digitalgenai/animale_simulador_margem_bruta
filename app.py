@@ -920,7 +920,8 @@ app.layout = dbc.Container(
                                             options=[{"label": x, "value": x} for x in _TIPO_EMBAL_OPCOES],
                                             value="[TODAS]",
                                             clearable=False,
-                                            className="shadow-sm"
+                                            className="shadow-sm",
+                                            max_height=400
                                         )
                                     ], lg=3, md=6, className="mb-3"),
                                     dbc.Col([
@@ -1241,16 +1242,25 @@ def update_grid_headers(n_clicks_atualizar, mes_ref, periodo_tipo, mes_inicio, m
     Output("fab", "value"),
     Output("cat", "options"),
     Output("cat", "value"),
+    Output("tipo_embal", "options"),
+    Output("tipo_embal", "value"),
     Input("mes_ref", "value"),
     Input("forn", "value"),
 )
 def on_fornecedor_change(mes_ref, forn):
     df_base, _, _, _, _, _, _ = _get_data_for_mes_ref(mes_ref)
     fab_opts, cat_opts = _get_fab_cat_options_for_supplier(df_base, forn)
+    if "Tipo_Embalagem" in df_base.columns:
+        tipos = sorted(df_base["Tipo_Embalagem"].dropna().unique().tolist())
+    else:
+        tipos = [x for x in _TIPO_EMBAL_OPCOES if x != "[TODAS]"]
+    embal_opts = [{"label": x, "value": x} for x in ["[TODAS]"] + tipos]
     return (
         [{"label": x, "value": x} for x in fab_opts],
         "[TODOS]",
         [{"label": x, "value": x} for x in cat_opts],
+        "[TODAS]",
+        embal_opts,
         "[TODAS]",
     )
 
