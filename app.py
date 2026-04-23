@@ -921,7 +921,7 @@ app.layout = dbc.Container(
                                             value="[TODAS]",
                                             clearable=False,
                                             className="shadow-sm",
-                                            max_height=400
+                                            maxHeight=400
                                         )
                                     ], lg=3, md=6, className="mb-3"),
                                     dbc.Col([
