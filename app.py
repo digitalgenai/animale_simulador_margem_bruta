@@ -6,7 +6,7 @@ from openpyxl import load_workbook
 import logging
 import re
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta, date
 from typing import Any, Dict, List, Tuple
 
 import pandas as pd
@@ -19,7 +19,7 @@ from core.config import (
     BASE_SIMULADOR_PATH,
     COLUNA_AGREGACAO_PRINCIPAL,
 )
-from core.data_loader import load_base_data, get_month_context, get_last_available_date
+from core.data_loader import load_base_data, get_month_context
 from core.view_builders import (
     compute_summary,
     build_tab1_rows,
@@ -43,17 +43,21 @@ try:
         sheet_name="Base",
         dtype=str,
     )
-    _df_embal.columns = [c.strip() for c in _df_embal.columns]
-    _bc_col = next(c for c in _df_embal.columns if "barras" in c.lower())
-    _tp_col = next(c for c in _df_embal.columns if "embalagem" in c.lower())
-    _df_embal[_bc_col] = _df_embal[_bc_col].str.strip().str.replace(r"\.0$", "", regex=True)
-    _df_embal[_tp_col] = _df_embal[_tp_col].str.strip()
-    _TIPO_EMBAL_MAP = dict(zip(_df_embal[_bc_col], _df_embal[_tp_col]))
-    _tipos_unicos = sorted(_df_embal[_tp_col].dropna().unique().tolist())
-    _TIPO_EMBAL_OPCOES = ["[TODAS]"] + _tipos_unicos
-    del _df_embal, _bc_col, _tp_col, _tipos_unicos
+    _df_embal.columns = [c.strip().replace("\n", " ").replace("  ", " ") for c in _df_embal.columns]
+    _bc_col = next((c for c in _df_embal.columns if "barras" in c.lower()), None)
+    _tp_col = next((c for c in _df_embal.columns if "embalagem" in c.lower()), None)
+    if _bc_col and _tp_col:
+        _df_embal[_bc_col] = _df_embal[_bc_col].str.strip().str.replace(r"\.0$", "", regex=True)
+        _df_embal[_tp_col] = _df_embal[_tp_col].str.strip()
+        _TIPO_EMBAL_MAP = dict(zip(_df_embal[_bc_col], _df_embal[_tp_col]))
+        _tipos_unicos = sorted(_df_embal[_tp_col].dropna().unique().tolist())
+        _TIPO_EMBAL_OPCOES = ["[TODAS]"] + _tipos_unicos
+        logger.info("Embalagem carregada: %d tipos — %s", len(_tipos_unicos), _tipos_unicos)
+    else:
+        logger.warning("Colunas esperadas não encontradas em tipo_embalagem.xlsx. Colunas: %s", list(_df_embal.columns))
+    del _df_embal, _bc_col, _tp_col
 except Exception as _e:
-    logger.warning("Não foi possível carregar tipo_embalagem.xlsx: %s", _e)
+    logger.warning("Não foi possível carregar tipo_embalagem.xlsx: %s", _e, exc_info=True)
 
 # =============================================================================
 # Cache de datasets por Mês/Ano (evita reload em toda interação)
@@ -241,13 +245,9 @@ def _parse_ddmmyyyy_to_safe(s: str | None) -> str | None:
     return None
 
 
-_last_available_date = get_last_available_date()
-if _last_available_date:
-    DEFAULT_MES_FIM_DATE = _last_available_date.strftime("%Y-%m-%d")
-    DEFAULT_MES_INICIO_DATE = _last_available_date.strftime("%Y-%m-01")
-else:
-    DEFAULT_MES_FIM_DATE = None
-    DEFAULT_MES_INICIO_DATE = None
+_yesterday = date.today() - timedelta(days=1)
+DEFAULT_MES_FIM_DATE = _yesterday.strftime("%Y-%m-%d")
+DEFAULT_MES_INICIO_DATE = _yesterday.strftime("%Y-%m-01")
 
 
 # ---------- Helpers ----------
