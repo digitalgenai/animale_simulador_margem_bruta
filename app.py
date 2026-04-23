@@ -40,7 +40,7 @@ _TIPO_EMBAL_MAP: Dict[str, str] = {}
 _TIPO_EMBAL_OPCOES: List[str] = ["[TODAS]"]
 try:
     _df_embal = pd.read_excel(
-        os.environ.get("TIPO_EMBAL_PATH", r"C:\Users\ranyer.paiva\Downloads\tipo_embalagem.xlsx"),
+        os.environ.get("TIPO_EMBAL_PATH", Path(__file__).parent / "tipo_embalagem.xlsx"),
         sheet_name="Base",
         dtype=str,
     )
