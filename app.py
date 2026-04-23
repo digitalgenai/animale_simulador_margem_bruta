@@ -1242,25 +1242,16 @@ def update_grid_headers(n_clicks_atualizar, mes_ref, periodo_tipo, mes_inicio, m
     Output("fab", "value"),
     Output("cat", "options"),
     Output("cat", "value"),
-    Output("tipo_embal", "options"),
-    Output("tipo_embal", "value"),
     Input("mes_ref", "value"),
     Input("forn", "value"),
 )
 def on_fornecedor_change(mes_ref, forn):
     df_base, _, _, _, _, _, _ = _get_data_for_mes_ref(mes_ref)
     fab_opts, cat_opts = _get_fab_cat_options_for_supplier(df_base, forn)
-    if "Tipo_Embalagem" in df_base.columns:
-        tipos = sorted(df_base["Tipo_Embalagem"].dropna().unique().tolist())
-    else:
-        tipos = [x for x in _TIPO_EMBAL_OPCOES if x != "[TODAS]"]
-    embal_opts = [{"label": x, "value": x} for x in ["[TODAS]"] + tipos]
     return (
         [{"label": x, "value": x} for x in fab_opts],
         "[TODOS]",
         [{"label": x, "value": x} for x in cat_opts],
-        "[TODAS]",
-        embal_opts,
         "[TODAS]",
     )
 
@@ -1317,7 +1308,12 @@ def refresh_all(n_clicks_atualizar, active_tab, mes_ref, forn, fab, cat, tipo_em
     mes_fim_val = _parse_ddmmyyyy_to_safe(mes_fim_val)
     ref_efetivo = _resolve_mes_ref(periodo_tipo, mes_ref, mes_fim_val)
     mes_ini = _resolve_mes_inicio(periodo_tipo, ref_efetivo, mes_inicio_val, _get_available_safe())
-    df_base, bench_ano, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, force_reload=False, mes_inicio_safe=mes_ini, ref_start_date_iso=_start_iso, ref_end_date_iso=_end_iso)
+    df_base, bench_ano_filtered, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, force_reload=False, mes_inicio_safe=mes_ini, ref_start_date_iso=_start_iso, ref_end_date_iso=_end_iso)
+    # bench_ano sempre usa janela anual completa, independente do período customizado
+    if _start_iso or _end_iso:
+        _, bench_ano, _, _, _, _, _ = _get_data_for_mes_ref(ref_efetivo, force_reload=False)
+    else:
+        bench_ano = bench_ano_filtered
 
     meta_t1_atual = _safe_float_percent(meta_t1, 0.30)
     meta_t2_atual = _safe_float_percent(meta_t2, 0.00)
