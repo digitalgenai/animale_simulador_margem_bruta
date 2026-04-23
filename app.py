@@ -917,7 +917,7 @@ app.layout = dbc.Container(
                                         html.Div("Embalagem", className="small text-muted fw-bold mb-1"),
                                         dcc.Dropdown(
                                             id="tipo_embal",
-                                            options=[{"label": x, "value": x} for x in _TIPO_EMBAL_OPCOES],
+                                            options=[{"label": x, "value": x} for x in ["[TODAS]", "NÃO TEM", "PACOTEIRA", "PETISCO", "SACARIA", "SACHE"]],
                                             value="[TODAS]",
                                             clearable=False,
                                             className="shadow-sm",
