@@ -1287,11 +1287,11 @@ def on_cat_t3_change(mes_ref, cat_t3):
 
     Input("btn-atualizar", "n_clicks"),
     Input("tabs", "active_tab"),
+    Input("tipo_embal", "value"),
     State("mes_ref", "value"),
     State("forn", "value"),
     State("fab", "value"),
     State("cat", "value"),
-    State("tipo_embal", "value"),
     State("meta_t1", "value"),
     State("meta_t2", "value"),
     State("cat_t3", "value"),
@@ -1301,7 +1301,7 @@ def on_cat_t3_change(mes_ref, cat_t3):
     State("mes_inicio", "date"),
     State("mes_fim", "date"),
 )
-def refresh_all(n_clicks_atualizar, active_tab, mes_ref, forn, fab, cat, tipo_embal, meta_t1, meta_t2, cat_t3, forn_t3, sim_store, periodo_tipo, mes_inicio_val, mes_fim_val):
+def refresh_all(n_clicks_atualizar, active_tab, tipo_embal, mes_ref, forn, fab, cat, meta_t1, meta_t2, cat_t3, forn_t3, sim_store, periodo_tipo, mes_inicio_val, mes_fim_val):
     _start_iso = _extract_iso_date(mes_inicio_val) if periodo_tipo == "personalizado" else None
     _end_iso   = _extract_iso_date(mes_fim_val)   if periodo_tipo == "personalizado" else None
     mes_inicio_val = _parse_ddmmyyyy_to_safe(mes_inicio_val)
