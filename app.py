@@ -1222,12 +1222,12 @@ def _set_header(coldefs, field, header):
     Output("grid-t2", "columnDefs"),
     Output("grid-t3", "columnDefs"),
     Input("btn-atualizar", "n_clicks"),
+    Input("mes_inicio", "date"),
+    Input("mes_fim", "date"),
     State("mes_ref", "value"),
     State("periodo_tipo", "value"),
-    State("mes_inicio", "date"),
-    State("mes_fim", "date"),
 )
-def update_grid_headers(n_clicks_atualizar, mes_ref, periodo_tipo, mes_inicio, mes_fim):
+def update_grid_headers(n_clicks_atualizar, mes_inicio, mes_fim, mes_ref, periodo_tipo):
     _start_iso = _extract_iso_date(mes_inicio) if periodo_tipo == "personalizado" else None
     _end_iso   = _extract_iso_date(mes_fim)   if periodo_tipo == "personalizado" else None
     mes_inicio = _parse_ddmmyyyy_to_safe(mes_inicio)
@@ -1300,6 +1300,8 @@ def on_cat_t3_change(mes_ref, cat_t3):
     Input("btn-atualizar", "n_clicks"),
     Input("tabs", "active_tab"),
     Input("tipo_embal", "value"),
+    Input("mes_inicio", "date"),
+    Input("mes_fim", "date"),
     State("mes_ref", "value"),
     State("forn", "value"),
     State("fab", "value"),
@@ -1310,10 +1312,8 @@ def on_cat_t3_change(mes_ref, cat_t3):
     State("forn_t3", "value"),
     Input("store-sim", "data"),
     State("periodo_tipo", "value"),
-    State("mes_inicio", "date"),
-    State("mes_fim", "date"),
 )
-def refresh_all(n_clicks_atualizar, active_tab, tipo_embal, mes_ref, forn, fab, cat, meta_t1, meta_t2, cat_t3, forn_t3, sim_store, periodo_tipo, mes_inicio_val, mes_fim_val):
+def refresh_all(n_clicks_atualizar, active_tab, tipo_embal, mes_inicio_val, mes_fim_val, mes_ref, forn, fab, cat, meta_t1, meta_t2, cat_t3, forn_t3, sim_store, periodo_tipo):
     _start_iso = _extract_iso_date(mes_inicio_val) if periodo_tipo == "personalizado" else None
     _end_iso   = _extract_iso_date(mes_fim_val)   if periodo_tipo == "personalizado" else None
     mes_inicio_val = _parse_ddmmyyyy_to_safe(mes_inicio_val)
