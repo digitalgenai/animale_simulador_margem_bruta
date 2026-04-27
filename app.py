@@ -38,9 +38,19 @@ logger = logging.getLogger("simulador_web")
 # =============================================================================
 _TIPO_EMBAL_MAP: Dict[str, str] = {}
 _TIPO_EMBAL_OPCOES: List[str] = ["[TODAS]"]
+_EMBAL_DEFAULT_PATH = Path(os.environ.get("TIPO_EMBAL_PATH", "")) if os.environ.get("TIPO_EMBAL_PATH") else None
+_EMBAL_CANDIDATES = [p for p in [
+    _EMBAL_DEFAULT_PATH,
+    Path(__file__).parent / "data" / "tipo_embalagem.xlsx",
+    Path(__file__).parent / "tipo_embalagem.xlsx",
+] if p is not None]
+_EMBAL_FILE = next((p for p in _EMBAL_CANDIDATES if p.exists()), None)
 try:
+    if _EMBAL_FILE is None:
+        raise FileNotFoundError(f"tipo_embalagem.xlsx não encontrado. Tentativas: {_EMBAL_CANDIDATES}")
+    logger.info("Carregando embalagem de: %s", _EMBAL_FILE)
     _df_embal = pd.read_excel(
-        os.environ.get("TIPO_EMBAL_PATH", Path(__file__).parent / "tipo_embalagem.xlsx"),
+        _EMBAL_FILE,
         sheet_name="Base",
         dtype=str,
     )
@@ -136,9 +146,11 @@ def _get_data_for_mes_ref(
                 month_ctx = get_month_context()
 
         # Enriquecer com Tipo de Embalagem (join pelo Cod_Barras)
-        if _TIPO_EMBAL_MAP and isinstance(df_base, pd.DataFrame) and not df_base.empty:
+        if isinstance(df_base, pd.DataFrame) and not df_base.empty:
             df_base["Tipo_Embalagem"] = (
                 df_base["Cod_Barras"].map(_TIPO_EMBAL_MAP).fillna("NÃO TEM")
+                if _TIPO_EMBAL_MAP
+                else "NÃO TEM"
             )
 
         result = (df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global, month_ctx)
@@ -917,7 +929,7 @@ app.layout = dbc.Container(
                                         html.Div("Embalagem", className="small text-muted fw-bold mb-1"),
                                         dcc.Dropdown(
                                             id="tipo_embal",
-                                            options=[{"label": x, "value": x} for x in ["[TODAS]", "NÃO TEM", "PACOTEIRA", "PETISCO", "SACARIA", "SACHE"]],
+                                            options=[{"label": x, "value": x} for x in _TIPO_EMBAL_OPCOES],
                                             value="[TODAS]",
                                             clearable=False,
                                             className="shadow-sm",
