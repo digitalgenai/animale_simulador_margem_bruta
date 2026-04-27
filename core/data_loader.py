@@ -853,6 +853,53 @@ def load_base_data(
     if "Fornecedor" in df_base.columns:
         df_base["Fornecedor"] = df_base["Fornecedor"].replace({"SEM_INFO": "SEM FORNECEDOR CADASTRADO"})
 
+    # ── Classificação de Fornecedor por Fabricante ──────────────────────────
+    if "Fabricante" in df_base.columns and "Fornecedor" in df_base.columns:
+        _fab_upper = df_base["Fabricante"].astype(str).str.strip().str.upper()
+
+        _FABRICANTE_TO_FORNECEDOR = {
+            # TOY4PETS
+            "AMERICAN PET": "TOY4PETS",
+            "AMICUS INOVACOES": "TOY4PETS",
+            "CHALESCO": "TOY4PETS",
+            "FABRICA PET": "TOY4PETS",
+            "PETIX": "TOY4PETS",
+            "PRODUTOS VIDA MANSA LTDA": "TOY4PETS",
+            "VIDA MANSA": "TOY4PETS",
+            "TOH": "TOY4PETS",
+            # RBL
+            "DISTRIBUIDORA GOMES LTDA": "RBL",
+            "DOLCE PET": "RBL",
+            "DPET": "RBL",
+            "INABA - CHURU": "RBL",
+            "KELCO": "RBL",
+            "PROPLAN": "RBL",
+            "PURINA": "RBL",
+            "REJANE": "RBL",
+            "VETNIL": "RBL",
+            "ZEEDOG": "RBL",
+            # DECVET
+            "DECVET": "DECVET",
+            "MEGAZOO": "DECVET",
+            "MSD": "DECVET",
+            "ROYAL CANIN": "DECVET",
+            "VIRBAC": "DECVET",
+            # Tríade
+            "AVERT": "Tríade",
+            "CEVA": "Tríade",
+            "VANSIL": "Tríade",
+        }
+
+        _fornecedor_classificado = _fab_upper.map(_FABRICANTE_TO_FORNECEDOR)
+        # Onde houver mapeamento, sobrescreve o Fornecedor original
+        mask = _fornecedor_classificado.notna()
+        df_base.loc[mask, "Fornecedor"] = _fornecedor_classificado[mask]
+        logger.info(
+            "Classificação de fornecedor aplicada: %d de %d linhas reclassificadas.",
+            int(mask.sum()),
+            len(df_base),
+        )
+
     if "Cod_Barras" in df_base.columns:
         df_base["__barcode"] = _norm_barcode_series(df_base["Cod_Barras"])
     else:
