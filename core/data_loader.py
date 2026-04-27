@@ -884,10 +884,10 @@ def load_base_data(
             "MSD": "DECVET",
             "ROYAL CANIN": "DECVET",
             "VIRBAC": "DECVET",
-            # Tríade
-            "AVERT": "Tríade",
-            "CEVA": "Tríade",
-            "VANSIL": "Tríade",
+            # TRIADE
+            "AVERT": "TRIADE",
+            "CEVA": "TRIADE",
+            "VANSIL": "TRIADE",
         }
 
         _fornecedor_classificado = _fab_upper.map(_FABRICANTE_TO_FORNECEDOR)
@@ -899,6 +899,9 @@ def load_base_data(
             int(mask.sum()),
             len(df_base),
         )
+
+        # Unificar "TRIADE DISTRIBUIDORA" → "TRIADE"
+        df_base["Fornecedor"] = df_base["Fornecedor"].replace({"TRIADE DISTRIBUIDORA": "TRIADE"})
 
     if "Cod_Barras" in df_base.columns:
         df_base["__barcode"] = _norm_barcode_series(df_base["Cod_Barras"])
