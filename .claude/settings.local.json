@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(python3 -c ' *)",
-      "Bash(py -3 -c ' *)"
+      "Bash(py -3 -c ' *)",
+      "Bash(git -C \"C:/Users/ranyer.paiva/Desktop/animale_simulador_margem_bruta\" ls-files data/tipo_embalagem.xlsx)",
+      "Bash(git -C \"C:/Users/ranyer.paiva/Desktop/animale_simulador_margem_bruta\" add data/tipo_embalagem.xlsx)",
+      "Bash(git -C \"C:/Users/ranyer.paiva/Desktop/animale_simulador_margem_bruta\" status)"
     ]
   }
 }

@@ -1,3 +1,4 @@
 *.xlsx
+!data/tipo_embalagem.xlsx
 __pycache__/
 *.env
