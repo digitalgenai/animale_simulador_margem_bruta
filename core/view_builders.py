@@ -270,8 +270,8 @@ def build_tab1_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
         cod_barras_raw = row.get("Cod_Barras", "")
         cod_barras = str(cod_barras_raw).strip() if cod_barras_raw and str(cod_barras_raw).strip() not in ("", "nan", "None") else "-"
 
-        qtd_ref_raw = float(row.get("Qtd_Media_Mensal", 0.0))
-        fat_raw = qtd_ref_raw * p_atual
+        qtd_ref_raw = float(row.get("Qtd_Ref", 0.0))
+        fat_raw = float(row.get("Fat_Ref", qtd_ref_raw * p_atual))
 
         rows.append(
             {
@@ -366,8 +366,8 @@ def build_tab2_rows(df_view_atual: pd.DataFrame, sim_store: Dict[str, Any], meta
         cod_barras_raw2 = row.get("Cod_Barras", "")
         cod_barras2 = str(cod_barras_raw2).strip() if cod_barras_raw2 and str(cod_barras_raw2).strip() not in ("", "nan", "None") else "-"
 
-        qtd_ref_raw = float(row.get("Qtd_Media_Mensal", 0.0))
-        fat_raw = qtd_ref_raw * p_atual
+        qtd_ref_raw = float(row.get("Qtd_Ref", 0.0))
+        fat_raw = float(row.get("Fat_Ref", qtd_ref_raw * p_atual))
 
         rows.append(
             {

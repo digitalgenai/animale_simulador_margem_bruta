@@ -39,11 +39,12 @@ def _taxa_deducao(area: Optional[str] = None, taxa_extra: float = 0.0) -> float:
     """
     Retorna a taxa de dedução aplicável.
 
-    Regra: TAXA_DEDUCAO_FATURAMENTO (22,03%) para todas as categorias,
-    incluindo Saúde/Estética, alinhando com a lógica do Power BI.
+    Regra: TAXA_ESTETICA_SAUDE (2,38%) para Estética/Saúde;
+    TAXA_DEDUCAO_FATURAMENTO (22,03%) para demais categorias.
     taxa_extra (opcional) é somada ao resultado final.
     """
-    return TAXA_DEDUCAO_FATURAMENTO + float(taxa_extra or 0.0)
+    base = TAXA_ESTETICA_SAUDE if is_estetica_saude(area) else TAXA_DEDUCAO_FATURAMENTO
+    return base + float(taxa_extra or 0.0)
 
 
 def get_menor_concorrente(row: dict) -> float:
