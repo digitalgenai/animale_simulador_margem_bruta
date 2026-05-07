@@ -501,10 +501,10 @@ def _breakdown_component(breakdown: List[Dict[str, Any]], month_ctx: Dict[str, A
     header = html.Thead(
         html.Tr(
             [
-                html.Th("CATEGORIA"),
-                html.Th(f"FAT({lab})"),
-                html.Th(f"MG({lab})"),
-                html.Th("GL(Year)"),
+                html.Th("CATEGORIA", className="text-navy"),
+                html.Th(f"FAT({lab})", className="text-navy"),
+                html.Th(f"MG({lab})", className="text-navy"),
+                html.Th("GL(Year)", className="text-navy"),
             ]
         )
     )
@@ -538,37 +538,37 @@ def _history_component(hist: Dict[str, Any], suffix: str, month_ctx: Dict[str, A
 
     return html.Div(
         [
-            html.Div("Detalhes (Inteligência Temporal):", style={"fontWeight": "700", "color": "navy"}),
+            html.Div("Detalhes (Inteligência Temporal):", style={"fontWeight": "700"}, className="text-navy"),
             html.Div("Clique em um produto na tabela", style={"fontSize": "12px", "color": "#666", "marginBottom": "6px"}),
 
             html.Div(
                 [
-                    html.Span("Cod. Barras: ", style={"width": "90px", "display": "inline-block"}),
+                    html.Span("Cod. Barras: ", style={"width": "90px", "display": "inline-block"}, className="text-navy"),
                     html.Span(cod_barras_exib, style={"fontFamily": "monospace"}),
                 ]
             ),
             html.Div(
                 [
-                    html.Span("Produto: ", style={"width": "90px", "display": "inline-block"}),
+                    html.Span("Produto: ", style={"width": "90px", "display": "inline-block"}, className="text-navy"),
                     html.Span(produto_exib, style={"fontStyle": "italic"}),
                 ]
             ),
             html.Div(
                 [
-                    html.Span("Méd 6M: ", style={"width": "70px", "display": "inline-block"}),
+                    html.Span("Méd 6M: ", style={"width": "70px", "display": "inline-block"}, className="text-navy"),
                     html.Span(hist.get("hist_6m", "-"), style={"fontWeight": "700"}),
                     html.Span("  "),
-                    html.Span("Méd 3M: ", style={"width": "70px", "display": "inline-block", "marginLeft": "10px"}),
+                    html.Span("Méd 3M: ", style={"width": "70px", "display": "inline-block", "marginLeft": "10px"}, className="text-navy"),
                     html.Span(hist.get("hist_3m", "-"), style={"fontWeight": "700"}),
                 ]
             ),
             html.Div(
                 [
-                    html.Span(f"Venda {lab}: ", style={"width": "90px", "display": "inline-block"}),
-                    html.Span(hist.get("hist_ref", "-"), style={"fontWeight": "700", "color": "blue"}),
+                    html.Span(f"Venda {lab}: ", style={"width": "90px", "display": "inline-block"}, className="text-navy"),
+                    html.Span(hist.get("hist_ref", "-"), style={"fontWeight": "700"}),
                     html.Span("  "),
-                    html.Span("Pico: ", style={"width": "50px", "display": "inline-block", "marginLeft": "10px"}),
-                    html.Span(hist.get("hist_pico", "-"), style={"fontWeight": "700", "color": "green"}),
+                    html.Span("Pico: ", style={"width": "50px", "display": "inline-block", "marginLeft": "10px"}, className="text-navy"),
+                    html.Span(hist.get("hist_pico", "-"), style={"fontWeight": "700"}),
                 ]
             ),
         ],
@@ -678,8 +678,8 @@ app.index_string = """
         <meta http-equiv="Content-Language" content="pt-BR" />
         <meta name="language" content="pt-BR" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <link rel="icon" type="image/png" href="/assets/favicon.png">
         <title>{%title%}</title>
-        {%favicon%}
         {%css%}
     </head>
     <body>
@@ -698,50 +698,50 @@ store_sim_default = {"manual": {}, "conc": {}}
 
 # ColumnDefs
 coldefs_t1 = [
-    {"headerName": "Cod. Barras", "field": "Cod_Barras", "width": 130},
-    {"headerName": "Produto", "field": "Produto", "width": 260},
-    {"headerName": "ABC", "field": "ABC", "width": 70},
-    {"headerName": "Categ", "field": "Categ", "width": 140},
-    {"headerName": "Qtd Ref", "field": "Qtd Ref", "width": 95},
-    {"headerName": "Faturamento", "field": "Faturamento", "width": 130},
-    {"headerName": "Fat. Acum %", "field": "Fat_Acum_Pct", "width": 110},
-    {"headerName": "Preço Atual", "field": "Preço Atual", "width": 110},
-    {"headerName": "Custo", "field": "Custo", "width": 110},
-    {"headerName": "Marg R$", "field": "Marg R$", "width": 110},
-    {"headerName": "Marg %", "field": "Marg %", "width": 95},
-    {"headerName": "PETZ", "field": "PETZ", "width": 110},
-    {"headerName": "PROCAMPO", "field": "PROCAMPO", "width": 110},
-    {"headerName": "Dif % (menor preço)", "field": "Dif % (Menor)", "width": 120},
-    {"headerName": "Menor preço", "field": "Sim Preço", "width": 110},
-    {"headerName": "Sim Marg", "field": "Sim Marg", "width": 95},
-    {"headerName": "Sim Custo", "field": "Sim Custo", "width": 120},
+    {"headerName": "Cod. Barras", "field": "Cod_Barras", "width": 130, "headerClass": "text-navy"},
+    {"headerName": "Produto", "field": "Produto", "width": 260, "headerClass": "text-navy"},
+    {"headerName": "ABC", "field": "ABC", "width": 70, "headerClass": "text-navy"},
+    {"headerName": "Categ", "field": "Categ", "width": 140, "headerClass": "text-navy"},
+    {"headerName": "Qtd Ref", "field": "Qtd Ref", "width": 95, "headerClass": "text-navy"},
+    {"headerName": "Faturamento", "field": "Faturamento", "width": 130, "headerClass": "text-navy"},
+    {"headerName": "Fat. Acum %", "field": "Fat_Acum_Pct", "width": 110, "headerClass": "text-navy"},
+    {"headerName": "Preço Atual", "field": "Preço Atual", "width": 110, "headerClass": "text-navy"},
+    {"headerName": "Custo", "field": "Custo", "width": 110, "headerClass": "text-navy"},
+    {"headerName": "Marg R$", "field": "Marg R$", "width": 110, "headerClass": "text-navy"},
+    {"headerName": "Marg %", "field": "Marg %", "width": 95, "headerClass": "text-navy"},
+    {"headerName": "PETZ", "field": "PETZ", "width": 110, "headerClass": "text-navy"},
+    {"headerName": "PROCAMPO", "field": "PROCAMPO", "width": 110, "headerClass": "text-navy"},
+    {"headerName": "Dif % (menor preço)", "field": "Dif % (Menor)", "width": 120, "headerClass": "text-navy"},
+    {"headerName": "Menor preço", "field": "Sim Preço", "width": 110, "headerClass": "text-navy"},
+    {"headerName": "Sim Marg", "field": "Sim Marg", "width": 95, "headerClass": "text-navy"},
+    {"headerName": "Sim Custo", "field": "Sim Custo", "width": 120, "headerClass": "text-navy"},
 ]
 
 coldefs_t2 = [
-    {"headerName": "Cod. Barras", "field": "Cod_Barras", "width": 130},
-    {"headerName": "Produto", "field": "Produto", "width": 260},
-    {"headerName": "ABC", "field": "ABC", "width": 70},
-    {"headerName": "Categ", "field": "Categ", "width": 140},
-    {"headerName": "Qtd Ref", "field": "Qtd Ref", "width": 95},
-    {"headerName": "Faturamento", "field": "Faturamento", "width": 130},
-    {"headerName": "Fat. Acum %", "field": "Fat_Acum_Pct", "width": 110},
-    {"headerName": "Preço Atual", "field": "Preço Atual", "width": 110},
-    {"headerName": "Custo", "field": "Custo", "width": 110},
-    {"headerName": "Marg Atual %", "field": "Marg Atual %", "width": 115},
-    {"headerName": "PETZ", "field": "PETZ", "width": 110},
-    {"headerName": "PROCAMPO", "field": "PROCAMPO", "width": 110},
-    {"headerName": "Dif % (menor preço)", "field": "Dif % (menor preço)", "width": 130},
-    {"headerName": "DELTA ALVO %", "field": "DELTA ALVO %", "width": 120},
-    {"headerName": "Sim Preço (Conc)", "field": "Sim Preço (Conc)", "width": 130},
-    {"headerName": "Sim Margem (Result)", "field": "Sim Margem (Result)", "width": 140},
+    {"headerName": "Cod. Barras", "field": "Cod_Barras", "width": 130, "headerClass": "text-navy"},
+    {"headerName": "Produto", "field": "Produto", "width": 260, "headerClass": "text-navy"},
+    {"headerName": "ABC", "field": "ABC", "width": 70, "headerClass": "text-navy"},
+    {"headerName": "Categ", "field": "Categ", "width": 140, "headerClass": "text-navy"},
+    {"headerName": "Qtd Ref", "field": "Qtd Ref", "width": 95, "headerClass": "text-navy"},
+    {"headerName": "Faturamento", "field": "Faturamento", "width": 130, "headerClass": "text-navy"},
+    {"headerName": "Fat. Acum %", "field": "Fat_Acum_Pct", "width": 110, "headerClass": "text-navy"},
+    {"headerName": "Preço Atual", "field": "Preço Atual", "width": 110, "headerClass": "text-navy"},
+    {"headerName": "Custo", "field": "Custo", "width": 110, "headerClass": "text-navy"},
+    {"headerName": "Marg Atual %", "field": "Marg Atual %", "width": 115, "headerClass": "text-navy"},
+    {"headerName": "PETZ", "field": "PETZ", "width": 110, "headerClass": "text-navy"},
+    {"headerName": "PROCAMPO", "field": "PROCAMPO", "width": 110, "headerClass": "text-navy"},
+    {"headerName": "Dif % (menor preço)", "field": "Dif % (menor preço)", "width": 130, "headerClass": "text-navy"},
+    {"headerName": "DELTA ALVO %", "field": "DELTA ALVO %", "width": 120, "headerClass": "text-navy"},
+    {"headerName": "Sim Preço (Conc)", "field": "Sim Preço (Conc)", "width": 130, "headerClass": "text-navy"},
+    {"headerName": "Sim Margem (Result)", "field": "Sim Margem (Result)", "width": 140, "headerClass": "text-navy"},
 ]
 
 coldefs_t3 = [
-    {"headerName": "Fornecedor", "field": "Fornecedor", "width": 320},
-    {"headerName": "Fat Ref", "field": "Fat Ref", "width": 160},
-    {"headerName": "Fat. Acum %", "field": "Fat_Acum_Pct", "width": 120},
-    {"headerName": "R$ Margem", "field": "Margem Ref R$", "width": 160},
-    {"headerName": "% Margem", "field": "Margem Ref %", "width": 140},
+    {"headerName": "Fornecedor", "field": "Fornecedor", "width": 320, "headerClass": "text-navy"},
+    {"headerName": "Fat Ref", "field": "Fat Ref", "width": 160, "headerClass": "text-navy"},
+    {"headerName": "Fat. Acum %", "field": "Fat_Acum_Pct", "width": 120, "headerClass": "text-navy"},
+    {"headerName": "R$ Margem", "field": "Margem Ref R$", "width": 160, "headerClass": "text-navy"},
+    {"headerName": "% Margem", "field": "Margem Ref %", "width": 140, "headerClass": "text-navy"},
 ]
 
 
@@ -791,7 +791,7 @@ def make_summary_block(suffix: str):
                     [
                         dbc.Col(
                             [
-                                html.Div("Top Categorias (Forn. vs Benchmarks):", style={"fontWeight": "700"}),
+                                html.Div("Top Categorias (Forn. vs Benchmarks):", style={"fontWeight": "700"}, className="text-navy"),
                                 html.Div(id=f"breakdown-{suffix}", children=_breakdown_component([], month_ctx0)),
                             ],
                             md=7,
@@ -821,6 +821,16 @@ app.layout = dbc.Container(
         dcc.Store(id="store-selected", storage_type="session", data={"produto_key": None, "area": ""}),
         dcc.Download(id="download-excel"),
         dcc.Interval(id="interval-refresh", interval=_CACHE_TTL_SECONDS * 1000, n_intervals=0),
+        
+        dbc.Row(
+            dbc.Col(
+                html.Div([
+                    html.Div([
+                        html.Img(src="/assets/animale-logo.png"),
+                        ], className="header")
+                ])
+            )
+        ),
 
         dbc.Row(
             dbc.Col(
@@ -884,10 +894,16 @@ app.layout = dbc.Container(
                                         )
                                     ], id="col-mes-fim", md=4, lg=2, className="mb-3", style={"display": "none"}),
                                     dbc.Col([
-                                        dbc.Button("Atualizar Resumo", id="btn-atualizar", color="primary", className="w-100 shadow-sm fw-bold")
-                                    ], md=2, lg=2, className="ms-md-auto mb-3 align-self-end"),
+                                        dbc.Button([
+                                            html.Img(src="/assets/revision-regular-24.png"),
+                                            "Atualizar Resumo"
+                                            ], id="btn-atualizar", className="btn")
+                                    ], md=2, lg=3, className="ms-md-auto mb-3 d-flex justify-content-end"),
                                     dbc.Col([
-                                        dbc.Button("Exportar Excel", id="btn-export", color="success", className="w-100 shadow-sm fw-bold")
+                                        dbc.Button([
+                                            html.Img(src="/assets/file-export-solid-24.png"),
+                                            "Exportar Excel"
+                                            ], id="btn-export", color="success", className="btn")
                                     ], md=2, lg=2, className="mb-3 align-self-end"),
                                 ], className="g-3 align-items-end"),
                                 html.Hr(className="text-muted mt-0 mb-4"),
@@ -937,23 +953,23 @@ app.layout = dbc.Container(
                                         )
                                     ], lg=3, md=6, className="mb-3"),
                                     dbc.Col([
-                                        html.Div("Sim. Margem (%)", className="small text-dark fw-bold mb-1"),
+                                        html.Div("Sim. Margem (%)", className="small text-muted fw-bold mb-1"),
                                         dbc.Input(
                                             id="meta_t1",
                                             value=30.0,
                                             type="number",
                                             step=0.1,
-                                            className="shadow-sm text-dark fw-bold"
+                                            className="shadow-sm text-muted"
                                         )
                                     ], lg=2, md=6, className="mb-3"),
                                     dbc.Col([
-                                        html.Div("Delta Alvo (%)", className="small text-dark fw-bold mb-1"),
+                                        html.Div("Delta Alvo (%)", className="small text-muted fw-bold mb-1"),
                                         dbc.Input(
                                             id="meta_t2",
                                             value=0.0,
                                             type="number",
                                             step=0.1,
-                                            className="shadow-sm text-dark fw-bold"
+                                            className="shadow-sm text-muted"
                                         )
                                     ], lg=2, md=6, className="mb-3"),
                                 ], className="g-3 align-items-end"),
@@ -1016,7 +1032,7 @@ app.layout = dbc.Container(
                                 [
                                     html.Div(
                                         [
-                                            html.Span("1. Selecione a Categoria (Principal): ", style={"fontWeight": "700", "color": "navy"}),
+                                            html.Span("1. Selecione a Categoria (Principal): ", style={"fontWeight": "700"}, className="text-navy"),
                                             dcc.Dropdown(
                                                 id="cat_t3",
                                                 options=[{"label": x, "value": x} for x in lista_categorias0],
@@ -1025,8 +1041,8 @@ app.layout = dbc.Container(
                                                 style={"width": "260px", "display": "inline-block"},
                                                 clearable=True,
                                             ),
-                                            html.Span("  -->  ", style={"fontWeight": "700"}),
-                                            html.Span("2. Fornecedor (Opcional): ", style={"fontWeight": "700", "color": "navy"}),
+                                            html.Span("    ", style={"fontWeight": "700"}),
+                                            html.Span("2. Fornecedor (Opcional): ", style={"fontWeight": "700"}, className="text-navy"),
                                             dcc.Dropdown(
                                                 id="forn_t3",
                                                 options=[{"label": "[TODOS]", "value": "[TODOS]"}],
@@ -1040,7 +1056,6 @@ app.layout = dbc.Container(
                                 ]
                             ),
                             className="mb-2",
-                            style={"backgroundColor": "#e1e1e1"},
                         ),
                         dcc.Loading(
                             type="circle",
@@ -1846,4 +1861,4 @@ def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_st
 if __name__ == "__main__":
     import os
     debug = os.getenv("DEBUG", "false").lower() == "true"
-    app.run(debug=debug, host="0.0.0.0", port=8050)
+    app.run(debug=True, host="0.0.0.0", port=8050)

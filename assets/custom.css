@@ -1,38 +1,120 @@
+@import url("https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap");
+
+* {
+  font-family: "Poppins", sans-serif;
+}
+
+:root {
+  --yellow: #ffc629;
+  --yellow-light: #fff3c4;
+  --yellow-deep: #e8a800;
+  --navy: #002856;
+  --navy-dark: #001a3a;
+  --navy-mid: #1a4080;
+  --cream: #f5edd8;
+  --cream-mid: #ede0c4;
+}
+
 /* Estilos de linha (equivalentes às cores do desktop) */
 .ag-theme-alpine .row-neg {
-    background-color: #D51313 !important;
-    color: white !important;
+  background-color: #d51313 !important;
+  color: white !important;
+}
+
+.ag-theme-alpine .row-yellow {
+  background-color: #fff59d !important;
+}
+
+/* Pequenos ajustes visuais */
+.kpi-label {
+  font-size: 12px;
+  color: #333;
+  margin-right: 6px;
+}
+
+.kpi-value {
+  font-weight: 700;
+  margin-right: 16px;
+}
+
+.small-muted {
+  font-size: 12px;
+  color: #6c757d;
+}
+
+.breakdown-table th,
+.breakdown-table td {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.history-box {
+  background: #e6f2ff;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+/***** ADICIONAL *****/
+
+body {
+  background-color: var(--cream);
+  padding-bottom: 16px;
+}
+.header {
+  margin: 16px 0 26px 0;
+  border-radius: 8px;
+  & img {
+    height: 50px;
   }
-  
-  .ag-theme-alpine .row-yellow {
-    background-color: #FFF59D !important;
+}
+input, select{
+  &:focus{
+    outline-color: var(--navy) !important;
   }
-  
-  /* Pequenos ajustes visuais */
-  .kpi-label {
-    font-size: 12px;
-    color: #333;
-    margin-right: 6px;
+}
+.text-navy{
+  color: var(--navy) !important;
+}
+.card{
+  border: none;
+  box-shadow: 0 5px 10px #00000015;
+  margin-bottom: 26px;
+}
+.text-muted{
+  color: var(--navy) !important;
+}
+.btn{
+  background-color: var(--navy);
+  border: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  font-weight: bold;
+  text-transform: uppercase;
+  line-height: 40px;
+  padding: 0 16px;
+  &:hover{
+    background-color: #1a4080;
   }
-  
-  .kpi-value {
-    font-weight: 700;
-    margin-right: 16px;
+  & img{
+    width: 20px;
+    display: block;
   }
-  
-  .small-muted {
-    font-size: 12px;
-    color: #6c757d;
-  }
-  
-  .breakdown-table th, .breakdown-table td {
-    padding: 4px 8px;
-    font-size: 12px;
-  }
-  
-  .history-box {
-    background: #e6f2ff;
-    border-radius: 8px;
-    padding: 10px;
-  }
-  
+}
+.dash-options-list-option:not(:has(input[disabled])):hover, .dash-options-list-option:not(:has(input[disabled])):focus-within, .dash-datepicker-month-nav{
+  color: var(--navy);
+}
+.dash-datepicker-calendar td.dash-datepicker-calendar-date-selected:not( .dash-datepicker-calendar-date-outside ){
+  background-color: var(--navy);
+}
+.dash-datepicker{
+  accent-color: var(--navy) !important;
+  outline-color: var(--navy) !important;
+}
+.dash-datepicker-input-wrapper:has(:focus-visible){
+  outline-color: var(--navy) !important;
+}
+.history-box{
+  background-color: var(--yellow-light);
+}
