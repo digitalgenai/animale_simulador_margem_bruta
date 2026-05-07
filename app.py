@@ -1861,4 +1861,4 @@ def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_st
 if __name__ == "__main__":
     import os
     debug = os.getenv("DEBUG", "false").lower() == "true"
-    app.run(debug=True, host="0.0.0.0", port=8050)
+    app.run(debug=debug, host="0.0.0.0", port=8050)
