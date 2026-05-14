@@ -107,8 +107,10 @@ def _get_data_for_mes_ref(
     mes_inicio_safe: str | None = None,
     ref_start_date_iso: str | None = None,
     ref_end_date_iso: str | None = None,
+    filial: str | None = None,
 ):
-    key = f"{mes_ref_safe or '__DEFAULT__'}|{mes_inicio_safe or ''}|{ref_start_date_iso or ''}|{ref_end_date_iso or ''}"
+    _filial_key = filial if filial and filial != "[TODAS]" else ""
+    key = f"{mes_ref_safe or '__DEFAULT__'}|{mes_inicio_safe or ''}|{ref_start_date_iso or ''}|{ref_end_date_iso or ''}|{_filial_key}"
 
     with _DATA_LOCK:
         if force_reload:
@@ -123,11 +125,13 @@ def _get_data_for_mes_ref(
 
         # carrega ainda sob lock (evita corrida em callbacks paralelos)
         y_ini, m_ini = _parse_ym_safe(mes_inicio_safe) if mes_inicio_safe else (None, None)
+        _filial_filter = filial if filial and filial != "[TODAS]" else None
 
         if mes_ref_safe is None or mes_ref_safe == "__DEFAULT__":
             df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data(
                 ref_start_year=y_ini, ref_start_month_num=m_ini,
                 ref_start_date=ref_start_date_iso, ref_end_date=ref_end_date_iso,
+                filial_filter=_filial_filter,
             )
             month_ctx = get_month_context()
         else:
@@ -136,12 +140,14 @@ def _get_data_for_mes_ref(
                 df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data(
                     ref_start_year=y_ini, ref_start_month_num=m_ini,
                     ref_start_date=ref_start_date_iso, ref_end_date=ref_end_date_iso,
+                    filial_filter=_filial_filter,
                 )
                 month_ctx = get_month_context()
             else:
                 df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global = load_base_data(
                     ref_year=y, ref_month=m, ref_start_year=y_ini, ref_start_month_num=m_ini,
                     ref_start_date=ref_start_date_iso, ref_end_date=ref_end_date_iso,
+                    filial_filter=_filial_filter,
                 )
                 month_ctx = get_month_context()
 
@@ -152,6 +158,11 @@ def _get_data_for_mes_ref(
                 if _TIPO_EMBAL_MAP
                 else "NÃO TEM"
             )
+            # Fallback: produtos cujo nome começa com "PETISCO" e não estão no Excel
+            if "Produto" in df_base.columns:
+                mask_sem_tipo = df_base["Tipo_Embalagem"] == "NÃO TEM"
+                mask_petisco = df_base["Produto"].str.strip().str.upper().str.startswith("PETISCO")
+                df_base.loc[mask_sem_tipo & mask_petisco, "Tipo_Embalagem"] = "PETISCO"
 
         result = (df_base, bench_ano, bench_6m, bench_3m, lista_fornecedores, lista_categorias_global, month_ctx)
         _DATA_CACHE[key] = (result, datetime.now())
@@ -203,6 +214,24 @@ def _resolve_mes_inicio(periodo_tipo: str | None, mes_ref_safe: str | None, mes_
     start_idx = max(0, idx - (n - 1))
     return available_safe[start_idx]
 
+
+# =============================================================================
+# Lista de Filiais (carregada do banco na inicialização)
+# =============================================================================
+_LISTA_FILIAIS: List[str] = []
+try:
+    from core.db import get_engine as _get_engine_filial
+    from sqlalchemy import text as _text_filial
+    from core.config import PGSCHEMA_DEFAULT as _schema_filial, PGTABLE_DEFAULT as _table_filial
+    _engine_filial = _get_engine_filial()
+    with _engine_filial.connect() as _conn_filial:
+        _rows_filial = _conn_filial.execute(
+            _text_filial(f"SELECT DISTINCT filial FROM {_schema_filial}.{_table_filial} WHERE filial IS NOT NULL ORDER BY filial")
+        ).fetchall()
+        _LISTA_FILIAIS = [r[0] for r in _rows_filial if r[0]]
+    logger.info("Filiais carregadas: %s", _LISTA_FILIAIS)
+except Exception as _e_fil:
+    logger.warning("Não foi possível carregar lista de filiais: %s", _e_fil)
 
 # --- Carga default (para montar layout inicial) ---
 try:
@@ -953,6 +982,17 @@ app.layout = dbc.Container(
                                         )
                                     ], lg=3, md=6, className="mb-3"),
                                     dbc.Col([
+                                        html.Div("Filial", className="small text-muted fw-bold mb-1"),
+                                        dcc.Dropdown(
+                                            id="filial",
+                                            options=[{"label": "[TODAS]", "value": "[TODAS]"}] + [{"label": x, "value": x} for x in _LISTA_FILIAIS],
+                                            value="[TODAS]",
+                                            clearable=False,
+                                            className="shadow-sm",
+                                            maxHeight=400
+                                        )
+                                    ], lg=3, md=6, className="mb-3"),
+                                    dbc.Col([
                                         html.Div("Sim. Margem (%)", className="small text-muted fw-bold mb-1"),
                                         dbc.Input(
                                             id="meta_t1",
@@ -1317,6 +1357,7 @@ def on_cat_t3_change(mes_ref, cat_t3):
     Input("tipo_embal", "value"),
     Input("mes_inicio", "date"),
     Input("mes_fim", "date"),
+    Input("filial", "value"),
     State("mes_ref", "value"),
     State("forn", "value"),
     State("fab", "value"),
@@ -1328,17 +1369,17 @@ def on_cat_t3_change(mes_ref, cat_t3):
     Input("store-sim", "data"),
     State("periodo_tipo", "value"),
 )
-def refresh_all(n_clicks_atualizar, active_tab, tipo_embal, mes_inicio_val, mes_fim_val, mes_ref, forn, fab, cat, meta_t1, meta_t2, cat_t3, forn_t3, sim_store, periodo_tipo):
+def refresh_all(n_clicks_atualizar, active_tab, tipo_embal, mes_inicio_val, mes_fim_val, filial, mes_ref, forn, fab, cat, meta_t1, meta_t2, cat_t3, forn_t3, sim_store, periodo_tipo):
     _start_iso = _extract_iso_date(mes_inicio_val) if periodo_tipo == "personalizado" else None
     _end_iso   = _extract_iso_date(mes_fim_val)   if periodo_tipo == "personalizado" else None
     mes_inicio_val = _parse_ddmmyyyy_to_safe(mes_inicio_val)
     mes_fim_val = _parse_ddmmyyyy_to_safe(mes_fim_val)
     ref_efetivo = _resolve_mes_ref(periodo_tipo, mes_ref, mes_fim_val)
     mes_ini = _resolve_mes_inicio(periodo_tipo, ref_efetivo, mes_inicio_val, _get_available_safe())
-    df_base, bench_ano_filtered, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, force_reload=False, mes_inicio_safe=mes_ini, ref_start_date_iso=_start_iso, ref_end_date_iso=_end_iso)
+    df_base, bench_ano_filtered, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, force_reload=False, mes_inicio_safe=mes_ini, ref_start_date_iso=_start_iso, ref_end_date_iso=_end_iso, filial=filial)
     # bench_ano sempre usa janela anual completa, independente do período customizado
     if _start_iso or _end_iso:
-        _, bench_ano, _, _, _, _, _ = _get_data_for_mes_ref(ref_efetivo, force_reload=False)
+        _, bench_ano, _, _, _, _, _ = _get_data_for_mes_ref(ref_efetivo, force_reload=False, filial=filial)
     else:
         bench_ano = bench_ano_filtered
 
@@ -1419,8 +1460,9 @@ def fit_columns_on_visible_tab(active_tab):
     State("periodo_tipo", "value"),
     State("mes_inicio", "date"),
     State("mes_fim", "date"),
+    State("filial", "value"),
 )
-def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, fab, cat, active_tab, periodo_tipo, mes_inicio_val, mes_fim_val):
+def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, fab, cat, active_tab, periodo_tipo, mes_inicio_val, mes_fim_val, filial):
     hist_default = {"produto": "Selecione...", "cod_barras": "-", "hist_6m": "-", "hist_3m": "-", "hist_ref": "-", "hist_pico": "-"}
 
     _start_iso = _extract_iso_date(mes_inicio_val) if periodo_tipo == "personalizado" else None
@@ -1429,7 +1471,7 @@ def on_cell_click(cell1, cell2, sel1, sel2, rowData1, rowData2, mes_ref, forn, f
     mes_fim_val = _parse_ddmmyyyy_to_safe(mes_fim_val)
     ref_efetivo = _resolve_mes_ref(periodo_tipo, mes_ref, mes_fim_val)
     mes_ini = _resolve_mes_inicio(periodo_tipo, ref_efetivo, mes_inicio_val, _get_available_safe())
-    df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, mes_inicio_safe=mes_ini, ref_start_date_iso=_start_iso, ref_end_date_iso=_end_iso)
+    df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, mes_inicio_safe=mes_ini, ref_start_date_iso=_start_iso, ref_end_date_iso=_end_iso, filial=filial)
 
     trig = ctx.triggered_id
 
@@ -1758,9 +1800,10 @@ def update_mkt_estimate(delta, selected, rowData):
     State("periodo_tipo", "value"),
     State("mes_inicio", "date"),
     State("mes_fim", "date"),
+    State("filial", "value"),
     prevent_initial_call=True,
 )
-def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_store, cs_t1, cs_t2, cs_t3, rd_t1, rd_t2, rd_t3, periodo_tipo, mes_inicio_val, mes_fim_val):
+def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_store, cs_t1, cs_t2, cs_t3, rd_t1, rd_t2, rd_t3, periodo_tipo, mes_inicio_val, mes_fim_val, filial):
     try:
         _start_iso = _extract_iso_date(mes_inicio_val) if periodo_tipo == "personalizado" else None
         _end_iso   = _extract_iso_date(mes_fim_val)   if periodo_tipo == "personalizado" else None
@@ -1768,7 +1811,7 @@ def export_excel(_, mes_ref, active_tab, forn, fab, cat, cat_t3, forn_t3, sim_st
         mes_fim_val = _parse_ddmmyyyy_to_safe(mes_fim_val)
         ref_efetivo = _resolve_mes_ref(periodo_tipo, mes_ref, mes_fim_val)
         mes_ini = _resolve_mes_inicio(periodo_tipo, ref_efetivo, mes_inicio_val, _get_available_safe())
-        df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, mes_inicio_safe=mes_ini, ref_start_date_iso=_start_iso, ref_end_date_iso=_end_iso)
+        df_base, _, _, _, _, _, month_ctx = _get_data_for_mes_ref(ref_efetivo, mes_inicio_safe=mes_ini, ref_start_date_iso=_start_iso, ref_end_date_iso=_end_iso, filial=filial)
         if df_base is None or df_base.empty:
             return no_update
 

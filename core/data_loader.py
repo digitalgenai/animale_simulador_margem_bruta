@@ -609,6 +609,7 @@ def load_base_data(
     ref_start_month_num: Optional[int] = None,
     ref_end_date: Optional[str] = None,
     ref_start_date: Optional[str] = None,
+    filial_filter: Optional[str] = None,
 ) -> Tuple[
     pd.DataFrame,
     Dict[str, float],
@@ -686,8 +687,9 @@ def load_base_data(
         n,
     )
 
-    _extra_start = "AND data_venda::date >= :ref_start_date" if ref_start_date else ""
-    _extra_end   = "AND data_venda::date <= :ref_end_date"   if ref_end_date   else ""
+    _extra_start  = "AND data_venda::date >= :ref_start_date" if ref_start_date else ""
+    _extra_end    = "AND data_venda::date <= :ref_end_date"   if ref_end_date   else ""
+    _extra_filial = "AND filial = :filial_filter"             if filial_filter  else ""
 
     sql = text(
         f"""
@@ -708,6 +710,7 @@ def load_base_data(
         AND date_trunc('month', data_venda)::date <= :ref_month
         {_extra_start}
         {_extra_end}
+        {_extra_filial}
         GROUP BY
             cod_produto, produto, cod_barras, fornecedor, fabricante, area, mes
         """
@@ -718,6 +721,8 @@ def load_base_data(
         _sql_params["ref_start_date"] = ref_start_date
     if ref_end_date:
         _sql_params["ref_end_date"] = ref_end_date
+    if filial_filter:
+        _sql_params["filial_filter"] = filial_filter
 
     df_win = pd.read_sql(
         sql,

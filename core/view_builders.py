@@ -55,7 +55,7 @@ def _get_last_closed_month_ts(month_ctx: Dict[str, Any] | None) -> pd.Timestamp 
 
     try:
         ts = pd.to_datetime(str(safe).replace("_", "-") + "-01")
-        return ts - pd.DateOffset(months=1)
+        return ts
     except Exception:
         return None
 
